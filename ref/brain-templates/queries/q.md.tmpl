@@ -1,0 +1,38 @@
+---
+title: "{{SHORT_SUMMARY}}"
+query_id: "{{QUERY_ID}}"
+guest_conversation_id: "{{HOSTEX_CONVERSATION_ID}}"
+guest_message_id: "{{HOSTEX_MESSAGE_ID}}"
+guest_property_id: "{{HOSTEX_PROPERTY_ID}}"
+status: open
+created_at: "{{UTC_NOW}}"
+updated_at: "{{UTC_NOW}}"
+owner_mirror_session_key: "{{OWNER_MIRROR_SESSION_KEY}}"
+guest_message_content: "{{GUEST_MESSAGE_CONTENT}}"
+asks:
+  - ask_id: "ask-1"
+    team_member_uid: "{{TEAM_MEMBER_UID}}"
+    role: "{{ROLE}}"
+    question: "{{QUESTION}}"
+    asked_at: "{{UTC_NOW}}"
+    original_asked_at: "{{UTC_NOW}}"
+    ping_count: 1
+    sla_deadline: "{{SLA_DEADLINE}}"
+    escalation_deadline: "{{ESCALATION_DEADLINE}}"
+    status: pending
+    answer: null
+    answered_at: null
+drafts: []
+---
+
+# {{SHORT_SUMMARY}}
+
+Guest conversation: `{{HOSTEX_CONVERSATION_ID}}`
+Guest message:
+
+> {{GUEST_MESSAGE_CONTENT}}
+
+## In-flight asks
+
+(This body is auto-maintained by the boss + listener skills for cat/grep
+debugging. The frontmatter is the authoritative state.)

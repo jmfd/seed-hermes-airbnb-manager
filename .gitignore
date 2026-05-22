@@ -1,0 +1,11 @@
+.DS_Store
+*.bak
+*.tmp
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+*.pyc
+.idea/
+.vscode/

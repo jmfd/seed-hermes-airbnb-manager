@@ -1,0 +1,33 @@
+---
+title: "{{DISPLAY_NAME}}"
+member_uid: "{{PLOW_CHAT_UID}}"
+role: handyman
+display_name: "{{DISPLAY_NAME}}"
+active: true
+# sla_minutes: 60           # handyman has a longer default SLA; not exercised in v0.1.0
+# escalation_minutes: 120   # OPTIONAL — overrides global default
+languages: [en]
+---
+
+# {{DISPLAY_NAME}} — Handyman / Maintenance
+
+{{DISPLAY_NAME}} handles repairs and maintenance across the properties. What they know:
+
+- Active maintenance issues (open work orders, what's broken, ETA on fix).
+- Appliance state (dishwasher, dryer, water heater — known quirks).
+- Lock / Seam / smart-home device state.
+- Vendor coordination (HVAC, plumber, electrician schedules).
+
+What they do NOT know:
+
+- Cleaning state — that's the cleaner's domain.
+- Pricing / booking changes — owner only.
+- Local recommendations — owner / property page only.
+
+## Notes for the boss skill
+
+- The handyman is often on-site or driving; replies may take longer than
+  the cleaner. Default SLA is 60 min via global default; raise via
+  `sla_minutes: 60` in this page's frontmatter once per-role wiring lands.
+- For active maintenance issues, ALWAYS include the property name in the
+  question — different units have different recurring issues.

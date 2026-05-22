@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n on all shell scripts
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r f; do
+            if ! bash -n "$f"; then
+              echo "SYNTAX FAIL: $f"
+              fail=1
+            fi
+          done < <(find ref -type f \( -name '*.sh' -o -name '*.bash' \))
+          exit "$fail"
+
+      - name: SEED.md normative-language declaration
+        run: |
+          grep -q "RFC 2119" SEED.md
+          grep -q "## Normative Language" SEED.md
+          grep -q "## Dependencies" SEED.md
+          grep -q "## Objects" SEED.md
+          grep -q "## Actions" SEED.md
+          grep -q "## Verify" SEED.md
+          grep -q "## Open" SEED.md
+          grep -q "## Non-Goals" SEED.md
+
+      - name: README install-order section
+        run: |
+          grep -q "## Install order" README.md
+          grep -q "seed-hermes-plow-chat" README.md
+          grep -q "seed-hermes-gbrain" README.md
+
+      - name: Secret hygiene — no committed secrets or .env files
+        run: |
+          set -e
+          if find . -type f -name '.env' -not -path './.git/*' | grep -q .; then
+            echo "FAIL: committed .env file detected"
+            exit 1
+          fi
+          if grep -RnE '(sk_[A-Za-z0-9]{16,}|tok_[A-Za-z0-9]{16,}|Bearer [A-Za-z0-9]{20,})' \
+               --include='*.sh' --include='*.md' --include='*.yaml' --include='*.yml' ref/ README.md SEED.md TESTING.md 2>/dev/null; then
+            echo "FAIL: possible committed secret detected"
+            exit 1
+          fi
+
+      - name: Brain template frontmatter parses
+        run: |
+          set -e
+          python3 - <<'PY'
+          import re, sys, pathlib
+          fail = []
+          for tmpl in pathlib.Path("ref/brain-templates").rglob("*.md.tmpl"):
+              text = tmpl.read_text()
+              m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+              if not m:
+                  fail.append(f"{tmpl}: no frontmatter")
+                  continue
+              # Frontmatter must be a non-empty YAML-style block; we do a
+              # cheap parse instead of pulling in PyYAML.
+              if "title:" not in m.group(1):
+                  fail.append(f"{tmpl}: frontmatter missing title")
+          if fail:
+              print("\n".join(fail))
+              sys.exit(1)
+          print(f"OK — {sum(1 for _ in pathlib.Path('ref/brain-templates').rglob('*.md.tmpl'))} templates valid")
+          PY

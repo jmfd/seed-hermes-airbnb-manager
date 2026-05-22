@@ -1,0 +1,27 @@
+---
+title: "{{PROPERTY_NICKNAME}}"
+property_id: "{{HOSTEX_PROPERTY_ID}}"
+address: "{{PROPERTY_ADDRESS}}"
+# team_assignments:        # OPTIONAL — leave unset to fall back to global team/*.md by role
+#   cleaner: "{{CLEANER_UID}}"   # plow_chat uid of the cleaner assigned to THIS property
+#   handyman: "{{HANDYMAN_UID}}" # plow_chat uid of the handyman for THIS property
+listing_links:
+  hostex: "https://hostex.io/listings/{{HOSTEX_PROPERTY_ID}}"
+---
+
+# {{PROPERTY_NICKNAME}}
+
+{{PROPERTY_ADDRESS}}.
+
+## Property quirks the boss skill can cite
+
+(Add free-text notes here. Examples: "The dishwasher is in the kitchen island,
+not under the counter." "Self check-in via Seam lock; code is sent at check-in
+day morning by Hostex." "Parking is street-only; no garage." "Cleaning slot
+is 11am-1pm between guests.")
+
+## Team assignment notes
+
+If `team_assignments.<role>` is set in the frontmatter, the boss skill prefers
+that team member for questions about this property. If unset, the boss skill
+falls back to the first `team/*.md` page with matching `role`.

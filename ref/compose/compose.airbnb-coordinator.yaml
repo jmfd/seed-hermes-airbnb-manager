@@ -1,0 +1,43 @@
+# Compose override added by seed-hermes-airbnb-manager.
+# Adds one sidecar service `airbnb-courier` to the seed-hermes scaffold.
+# The sidecar runs the courier tick loop that re-pings stale team-member
+# asks and wakes the owner Hermes profile to draft replies.
+#
+# Loaded via COMPOSE_FILE=compose.yaml:[...]:compose.airbnb-coordinator.yaml
+# in <scaffold>/.env (the install script writes this).
+
+services:
+  airbnb-courier:
+    image: nousresearch/hermes-agent:latest
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-airbnb-courier
+    user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
+    working_dir: /opt/data
+    environment:
+      # Pin HOME to the subprocess HOME the Hermes terminal tool uses, so
+      # gbrain / brain reads find /opt/data/home/.gbrain and
+      # /opt/data/home/brain consistently with what the boss/listener
+      # skills see.
+      HOME: /opt/data/home
+    env_file:
+      # Sidecar-only config — secret keys for plow_chat re-pings.
+      # Written by the install script with mode 600 in the host bind-mount.
+      - ./data/.airbnb-courier.env
+    volumes:
+      - ./data:/opt/data
+    depends_on:
+      - hermes
+    restart: unless-stopped
+    # PID 1 of the sidecar; runs the tick loop forever. Compose's
+    # restart:unless-stopped covers crash recovery.
+    command:
+      - bash
+      - -lc
+      - /opt/data/home/airbnb-courier/tick-loop.sh
+    healthcheck:
+      # The courier prints a line to stdout each tick; the healthcheck
+      # just confirms the process is alive. Compose logs are the real
+      # diagnostic surface.
+      test: ["CMD", "pgrep", "-f", "tick-loop.sh"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

@@ -1,0 +1,34 @@
+---
+title: "{{DISPLAY_NAME}}"
+member_uid: "{{PLOW_CHAT_UID}}"
+role: cleaner
+display_name: "{{DISPLAY_NAME}}"
+active: true
+# sla_minutes: 30           # OPTIONAL — overrides AIRBNB_COURIER_SLA_MINUTES global; not exercised in v0.1.0
+# escalation_minutes: 60    # OPTIONAL — overrides AIRBNB_COURIER_ESCALATION_MINUTES global; not exercised in v0.1.0
+languages: [en]
+---
+
+# {{DISPLAY_NAME}} — Cleaner
+
+{{DISPLAY_NAME}} handles cleaning turnovers. What they know:
+
+- Cleaning schedule (which property is cleaned which day, what time).
+- Early check-in availability (only the cleaner knows whether a unit is
+  ready before the standard check-in time).
+- Linen state, supply levels (paper goods, coffee, soap).
+- Special-request fulfillment (extra towels, requested amenities).
+
+What they do NOT know:
+
+- Maintenance issues — that's the handyman's domain.
+- Pricing, booking, or refund decisions — owner only.
+- Local recommendations (restaurants, transit) — owner / property page only.
+
+## Notes for the boss skill
+
+- Default question style: short, specific, includes the property name +
+  date. Avoid stacking multiple questions in one message — the cleaner
+  prefers to answer one thing at a time.
+- Best contact window: the cleaner usually replies within 30 minutes
+  during 8am-6pm local time. Outside that window, expect delay.
