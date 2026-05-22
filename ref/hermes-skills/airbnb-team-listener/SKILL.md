@@ -1,6 +1,6 @@
 ---
 name: airbnb-team-listener
-description: Info-capture-only listener for the team-side Hermes profile. Receives team-member messages on plow_chat, finds the matching open ask in /opt/data/home/brain/queries/q-*.md, records the team member's verbatim reply into the page, and acknowledges briefly in chat. Never sends to guests; never mirrors to owner channels. The boss profile handles guest-facing drafts on the next courier tick.
+description: Info-capture-only listener for the team-side Hermes profile. Receives team-member messages on plow_chat, finds the matching open ask in /opt/data/home/brain/queries/q-*.md, records the team member's verbatim reply via the query-edit.py helper (which owns flock + atomic write + git commit), and acknowledges briefly in chat. Never sends to guests; never mirrors to owner channels.
 version: 1.0.0
 ---
 
@@ -8,20 +8,31 @@ version: 1.0.0
 
 This skill runs on the TEAM profile (default name `daniel-team`). The team
 profile MUST NOT have any client-facing platforms enabled — no Hostex webhook,
-no telegram owner channel. The only outbound channel from this skill is back
-into the team member's own plow_chat for a brief "Got it, thanks." reply.
+no telegram owner channel. The installer rejects the install if those platforms
+are present in the team profile's `config.yaml`.
 
-## Trigger A: outbound boss-ask delivery (informational)
+The ONLY outbound message this skill produces is a brief "Got it, thanks."
+back to the team member in their own plow_chat.
 
-When the plow_chat adapter on this profile delivers an outbound
-`QUERY_ID=...` message FROM this profile to a team member, the adapter
-already logs the delivery in the session log. No skill action is required.
-The boss profile already wrote the query page before POSTing the ask via
-REST; the team listener never has to write on outbound.
+## Mutation contract
 
-(If your install bound BOSS-side asks to come through the TEAM profile's
-plow_chat adapter instead of REST POST, that's a non-standard topology and
-this skill does not support it.)
+The skill NEVER writes raw YAML to query pages. Every mutation goes through:
+
+```bash
+python3 /opt/data/home/airbnb-courier/query-edit.py write-answer \
+  --query-id <id> --ask-id <id> --answer-file /tmp/answer.txt
+```
+
+The helper owns flock + atomic write + git commit. Preserving the team
+member's reply VERBATIM (whitespace, emoji, multi-line) is the helper's
+guarantee — do not "clean up" the reply in the skill.
+
+## Trigger A: outbound boss-ask delivery (informational, no-op)
+
+When the team profile's plow_chat adapter delivers an outbound message FROM
+this profile to a team member (only happens if your install routes boss-asks
+through this profile's adapter instead of REST POST — non-standard topology),
+no skill action is required. Logs only.
 
 ## Trigger B: inbound team-member message
 
@@ -30,56 +41,64 @@ Activates when an inbound plow_chat message arrives on a chat whose
 
 Procedure:
 
-1. Extract `chat_id` (the plow_chat chat uid) and the message body from the
-   inbound event.
-2. List `/opt/data/home/brain/team/*.md`. For each, parse YAML frontmatter
-   `member_uid`. If `chat_id` does not match any team page's `member_uid`,
-   reply briefly in chat: `Got it, but I don't recognize this chat. Letting
-   the owner know.` Then STOP.
-3. List `/opt/data/home/brain/queries/q-*.md` sorted by mtime descending.
-   For each page, parse YAML frontmatter, scan `asks[]` for the most recent
-   entry where `team_member_uid == chat_id` AND `status == "pending"`.
-4. If no open ask is found, reply briefly in chat: `Got it, but there's no
-   open question for you right now.` Then STOP. Do NOT mutate any brain
-   page. Do NOT POST to Hostex. Do NOT mirror to any owner channel.
-5. If an open ask is found:
-   - Acquire flock on the query page file (`flock /opt/data/home/brain/queries/<file>`).
-   - Re-read frontmatter (the page may have been touched by the courier
-     between step 3 and now; the most-recent flocked-read view wins).
-   - If the targeted ask's `status` is no longer `pending` (already
-     `answered` or `escalated`), release flock, reply `Got it — already
-     covered, thanks.`, STOP.
-   - Set the ask's `answer = <verbatim team message body>` (preserve all
-     whitespace and emoji; do not trim except trailing newline).
-   - Set the ask's `answered_at = <UTC now ISO 8601>`.
-   - Set the ask's `status = answered`.
-   - Set the page's `updated_at = <UTC now>`.
-   - Write the page atomically (tmpfile + rename), release flock.
-6. `cd /opt/data/home/brain && git add queries/<file> &&
-   git commit -m "coordinator: team answer for <query_id>/<ask_id>"`.
-7. Reply briefly in the team chat: `Got it, thanks.`
+1. Extract the inbound `chat_id` (plow_chat chat uid) and the message body.
 
-The next courier tick (within 60 seconds by default) will pick up the
-state change and wake the boss profile to draft a reply.
+2. List `/opt/data/home/brain/team/*.md`. Parse YAML frontmatter `member_uid`
+   from each. If `chat_id` does NOT match any team page's `member_uid`,
+   reply briefly in chat:
+   `Got it, but I don't recognize this chat. Letting the owner know.`
+   Then STOP. (Unrecognized-team-member is a misconfiguration, not a flow.)
+
+3. Find the open ask. List `/opt/data/home/brain/queries/q-*.md` sorted by
+   mtime descending. For each, run:
+   ```bash
+   python3 /opt/data/home/airbnb-courier/query-edit.py show --query-id <id>
+   ```
+   Parse the JSON. Find the most recent ask where `team_member_uid == chat_id`
+   AND `status == "pending"`.
+
+4. If no open ask is found:
+   - Reply briefly: `Got it, but there's no open question for you right now.`
+   - STOP. Do NOT mutate any brain page. Do NOT POST to Hostex (the team
+     profile has no Hostex platform anyway). Do NOT mirror to any owner channel.
+
+5. If an open ask is found:
+   ```bash
+   # Write the team reply verbatim to a temp file so multi-line content survives.
+   printf '%s' "<verbatim team reply text>" > /tmp/answer.txt
+   python3 /opt/data/home/airbnb-courier/query-edit.py write-answer \
+     --query-id <id> --ask-id <ask_id> --answer-file /tmp/answer.txt
+   ```
+   The helper:
+   - flocks the page,
+   - re-reads under the lock (if the targeted ask is no longer `pending`,
+     it logs and exits 0 with a no-op),
+   - sets `ask.answer`, `ask.answered_at`, `ask.status = answered`,
+   - sets the page `updated_at`,
+   - bumps page `status` from `open` to `partial` if needed,
+   - atomically writes the page,
+   - `git add` + `git commit -m "coordinator: team answer for <id>/<ask_id>"`.
+
+6. Reply briefly in the team chat: `Got it, thanks.`
+
+The next courier tick (within 60 seconds by default) will pick up the state
+change and wake the boss profile to draft a reply. The listener does nothing
+else.
 
 ## Hard rules
 
 - NEVER POST to Hostex. The team profile doesn't have Hostex credentials
-  in its env, but don't try anyway.
+  configured anyway, but don't try.
 - NEVER mirror anything to the owner approval channel.
 - NEVER fan out additional plow_chat messages to other team members.
-- NEVER call the boss profile directly. The courier does that on tick.
+- NEVER call the boss profile directly. The courier wakes the boss on tick.
 - NEVER read or write `/opt/data/home/.airbnb-manager/pirate-joker-pending.json`
-  or `/opt/data/home/.airbnb-manager/outbox.jsonl`. Those are owner-profile
-  artifacts.
-- ALWAYS acquire flock on the query page before read+write.
-- ALWAYS git add + commit after writing.
-- ALWAYS preserve team member message text VERBATIM in `ask.answer`. The
-  boss profile cites verbatim when drafting; trimming or "cleaning up" the
-  reply breaks the citation contract.
-- If multiple team members might match (a single team member listed twice
-  under different `member_uid`s — misconfiguration), use the FIRST match.
-  Don't try to be clever.
-- The acknowledgement reply (`Got it, thanks.`) is OPTIONAL but
-  RECOMMENDED. If the chat is high-volume and an ack would be noisy, set
+  or `/opt/data/home/.airbnb-manager/outbox.jsonl`. Those are owner-profile artifacts.
+- ALWAYS go through `/opt/data/home/airbnb-courier/query-edit.py` for mutations.
+- ALWAYS preserve team-member message text VERBATIM — write to a tmp file
+  via `printf '%s'` (no `echo` — `echo` interprets backslashes). The helper
+  strips only one trailing newline (the IO artifact).
+- If multiple team pages match the inbound `chat_id` (misconfiguration), use
+  the FIRST match. Don't try to disambiguate.
+- The acknowledgement reply is OPTIONAL but RECOMMENDED. Set
   `AIRBNB_LISTENER_ACK_DISABLED=1` in the team profile `.env` to suppress.

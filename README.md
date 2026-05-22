@@ -61,19 +61,42 @@ cd seed-hermes-airbnb-manager
 ```
 
 That:
-- Drops both Hermes skills into `<scaffold>/data/profiles/<profile>/skills/`.
-- Writes both SOUL files.
-- Creates the `daniel-team` Hermes profile (mirrors the global model block per
-  the `seed-hermes-gbrain` pattern).
+- Checks all 4 prerequisites + that the owner profile exists + that the
+  owner profile has an existing Hostex webhook subscription bound to
+  `str-manager-approval` (refuses with `--skip-owner-webhook-check` only).
+- Installs PyYAML in the container if missing (required by `query-edit.py`).
+- Drops `query-edit.py` + the courier tick-loop into
+  `<scaffold>/data/home/airbnb-courier/` (the bind-mount).
+- Drops both Hermes skills into `<scaffold>/data/profiles/<profile>/skills/`,
+  the boss skill installed under the legacy name `str-manager-approval` so
+  the existing Hostex webhook subscription's `--skills` reference still resolves.
+- Writes both SOUL files (with `.bak.<ts>` backup of any prior SOUL.md).
+- Writes the owner profile `.env` with `PLOW_CHAT_BASE_URL`,
+  `TEAM_CHAT_SECRETS_FILE`, `AIRBNB_OWNER_MIRROR_SESSION_KEY` (blank — you fill
+  it post-install), `AIRBNB_COURIER_SLA_MINUTES`, `AIRBNB_COURIER_ESCALATION_MINUTES`,
+  `BRAIN_DIR`. Mode 600.
+- Creates the `daniel-team` Hermes profile if missing. **Enforces the
+  team-platform boundary**: refuses to proceed if the team profile's
+  `config.yaml` has `webhook` or `telegram` enabled. Sync-mirrors the
+  global model block.
 - Writes `compose.airbnb-coordinator.yaml` (courier sidecar) into the scaffold.
 - Appends `:compose.airbnb-coordinator.yaml` to the scaffold's `COMPOSE_FILE`
   in `.env` so `docker compose up -d` starts the sidecar without `-f` flags.
-- Drops brain page templates (`team/`, `properties/`, `queries/.gitkeep`) into
-  `/opt/data/home/brain/` and git-commits the templates.
+- Creates `data/home/brain/{team,properties,queries}/` with `queries/.gitkeep`
+  committed (so the dir is reachable from gbrain sync's HEAD). Drops template
+  pages into `data/home/brain/.airbnb-coordinator-templates/` for operators
+  to copy from (the templates are NOT auto-committed to the brain repo — the
+  wizard handles per-install authoring).
+- Pre-creates the legacy v9.0.0 state dirs `data/home/.airbnb-manager/`
+  with empty `pirate-joker-pending.json` and `outbox.jsonl` so the pirate
+  fast path's first write doesn't ENOENT.
+- `chown`s the secrets file + sidecar env + courier scripts inside the
+  container so the sidecar uid (501:20 by default) can read them on hosts
+  where the host UID is different.
 - Interactively walks the operator through `ref/scripts/seed_team_brain_pages.sh`
-  to author the initial `team/*.md` and `properties/*.md` pages for their
-  actual team + properties (NOT committed to this repo — these are per-install
-  config).
+  to author the initial `team/*.md` and `properties/*.md` pages, which the
+  wizard then git-commits into the brain repo (these are per-install config,
+  NOT committed to this repo).
 
 ## Quick smoke test
 

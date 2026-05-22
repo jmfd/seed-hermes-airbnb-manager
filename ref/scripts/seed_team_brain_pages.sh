@@ -149,19 +149,21 @@ while :; do
     continue
   fi
   write_team_page "$slug" "$display" "$uid" "$role" "$notes"
-  # Append to secrets file (atomic via python).
-  python3 - <<PY
+  # Append to secrets file via env-passed values (no source-string injection).
+  WIZARD_SECRETS_PATH="$SECRETS_HOST" WIZARD_UID="$uid" WIZARD_SECRET="$secret" \
+    python3 - <<'PY'
 import json, os, pathlib
-p = pathlib.Path("${SECRETS_HOST}")
+p = pathlib.Path(os.environ["WIZARD_SECRETS_PATH"])
 p.parent.mkdir(parents=True, exist_ok=True)
 try:
     d = json.loads(p.read_text())
 except Exception:
     d = {}
-d["${uid}"] = "${secret}"
+d[os.environ["WIZARD_UID"]] = os.environ["WIZARD_SECRET"]
 p.write_text(json.dumps(d, indent=2))
 os.chmod(p, 0o600)
 PY
+  unset WIZARD_SECRET
   count=$((count+1))
 done
 echo "${count} team member(s) authored."

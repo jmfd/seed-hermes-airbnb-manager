@@ -9,3 +9,16 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+
+# Operator scaffolds — never commit a running scaffold to this repo
+hermes-agent/
+data/
+
+# Per-install brain artifacts (operators may clone this repo alongside their
+# scaffold; these dirs shouldn't accidentally end up tracked)
+*-secrets.json
+.airbnb-courier.env
+.airbnb-coordinator-templates/
+
+# Codex / consult artifacts
+.context/codex-session-id

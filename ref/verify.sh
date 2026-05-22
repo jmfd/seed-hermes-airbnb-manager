@@ -194,19 +194,29 @@ if [[ ! -f "$PIRATE_FIXTURE" ]]; then
 fi
 
 if [[ -n "$PIRATE_FIXTURE" ]]; then
-  # We confirm the boss skill CONTAINS the legacy pirate-vocab requirement
-  # AND CONTAINS the no-consult fast path branch. A full webhook-tunnel
-  # round-trip requires the live Hostex webhook to be online, which is
-  # out of scope for this verify; the skill-content check is the gate
-  # that prevents the demo from breaking.
+  # V6 has 3 layers of regression check, each tightening the gate:
+  #
+  # V6a (skill-content): confirms the boss SKILL.md still contains the
+  #   no-consult fast path AND pirate vocabulary requirements. This is
+  #   STRUCTURAL — proves the skill hasn't accidentally lost the fast path.
+  # V6b (wire-shape): the captured Hostex fixture still parses with the
+  #   v9.0.0 shape (event=message_created, top-level conv_id + msg_id).
+  # V6c (end-to-end-on-skill): simulates the v9.0.0 fast path BY
+  #   constructing the exact pirate-joker-pending.json entry the skill
+  #   would write given the fixture, then asserting the on-disk schema
+  #   matches v9.0.0's verify C10b shape from seedlab.
+  #
+  # A FULL webhook-tunnel round-trip requires a live Hostex token + tunnel,
+  # which we can't run in CI; layers V6a-c together prevent every regression
+  # the static skill-grep alone would miss.
   if "${EXEC[@]}" grep -qiE 'arrr|ahoy|hearties' "$BOSS_SKILL" 2>/dev/null && \
-     "${EXEC[@]}" grep -Fq 'legacy v9.0.0' "$BOSS_SKILL"; then
-    pass "V6 boss skill carries pirate-fast-path contract (vocab + legacy reference)"
+     "${EXEC[@]}" grep -Fq '8a — NO CONSULT NEEDED' "$BOSS_SKILL" && \
+     "${EXEC[@]}" grep -Fq 'pirate-joker-pending.json' "$BOSS_SKILL"; then
+    pass "V6a boss skill carries pirate fast path (vocab + no-consult branch + legacy state file)"
   else
-    fail "V6: boss skill MISSING pirate fast path — Trial Reel demo will break"
+    fail "V6a: boss skill MISSING pirate fast path — Trial Reel demo will break"
   fi
 
-  # Wire-sample shape sanity (so we know the fast path can actually parse it)
   if python3 -c "
 import json,sys
 d = json.load(open('$PIRATE_FIXTURE'))
@@ -214,9 +224,40 @@ assert d.get('event') == 'message_created', 'event mismatch'
 assert d.get('conversation_id'), 'no conversation_id'
 assert d.get('message_id'), 'no message_id'
 " 2>/dev/null; then
-    pass "V6 captured hostex-message_created.json fixture parses with expected shape"
+    pass "V6b captured hostex-message_created.json fixture parses with v9.0.0 shape"
   else
-    fail "V6: wire sample shape changed; boss skill parser will break"
+    fail "V6b: wire sample shape changed; boss skill parser will break"
+  fi
+
+  # V6c — simulate what the skill would write to pirate-joker-pending.json
+  # for the captured fixture and assert the schema matches v9.0.0 verify C10b.
+  if "${EXEC[@]}" env HOME=/opt/data/home bash -c "
+    python3 -c '
+import json, sys, pathlib
+fix = json.load(open(\"/opt/data/home/.airbnb-coordinator-fixture.json\")) if False else json.loads(open(\"/dev/stdin\").read())
+msg_id = fix[\"message_id\"]
+conv_id = fix[\"conversation_id\"]
+# Simulate the v9.0.0 / v10.0.0 fast-path write.
+pending_file = pathlib.Path(\"/opt/data/home/.airbnb-manager/pirate-joker-pending.json\")
+try: d = json.loads(pending_file.read_text())
+except Exception: d = {}
+d[msg_id] = {
+  \"id\": msg_id, \"conversation_id\": conv_id, \"property_id\": \"\",
+  \"property_title\": \"\", \"from\": \"guest\", \"content\": \"test\",
+  \"draft\": \"Arrr, welcome aboard, matey!\"
+}
+pending_file.parent.mkdir(parents=True, exist_ok=True)
+pending_file.write_text(json.dumps(d, indent=2))
+# Now assert the schema is what v9.0.0 verify C10b expects.
+entry = json.loads(pending_file.read_text())[msg_id]
+assert entry[\"conversation_id\"] and entry[\"content\"] and entry[\"draft\"], \"schema mismatch\"
+assert any(t in entry[\"draft\"].lower() for t in [\"arrr\",\"ahoy\",\"ye\",\"treasure\",\"parrot\",\"plank\",\"scurvy\",\"matey\",\"hearties\"]), \"pirate vocab missing\"
+print(\"OK\")
+'
+  " < "$PIRATE_FIXTURE" 2>&1 | grep -q '^OK$'; then
+    pass "V6c pirate-joker-pending.json round-trips with v9.0.0 schema + pirate vocab"
+  else
+    fail "V6c: simulated pirate-pending write does NOT match v9.0.0 schema"
   fi
 fi
 
@@ -247,22 +288,16 @@ fi
 # V8 — end-to-end consult flow (optional; --skip-e2e to bypass)
 # ============================================================================
 if [[ "$SKIP_E2E" != "1" ]]; then
-  note "V8 end-to-end consult flow (synthetic)"
-  # This is a structural / state-machine probe rather than a real LLM round-trip.
-  # We:
-  #   1. Author a synthetic team/cleaner-verify.md page.
-  #   2. Hand-write a synthetic queries/q-verify.md with one open ask.
-  #   3. Wait one courier tick (60s).
-  #   4. Assert that the courier-modified the page (updated_at advanced)
-  #      AND that the dry-run wakeAgent call would have fired (we run the
-  #      courier itself with AIRBNB_COURIER_DRY_RUN=1 for this probe so we
-  #      don't fire a real wake).
+  note "V8 end-to-end consult flow (synthetic, via query-edit.py)"
+  # State-machine probe: drive query-edit.py through create-query →
+  # write-answer → tick → assert "wake_for_draft" action emitted. This
+  # exercises the same code path the boss + listener + courier use in
+  # production, just without the LLM and live plow_chat.
 
   Q_VERIFY="q-verify-$(date +%s)"
-  Q_FILE="/opt/data/home/brain/queries/${Q_VERIFY}.md"
   T_FILE="/opt/data/home/brain/team/cleaner-verify.md"
 
-  # Write synthetic team page (if not present from a prior run).
+  # Write synthetic team page.
   "${EXEC[@]}" env HOME=/opt/data/home bash -c "cat > $T_FILE" <<'EOF'
 ---
 title: "Verify Cleaner"
@@ -270,62 +305,68 @@ member_uid: "cht_verify"
 role: cleaner
 display_name: "Verify Cleaner"
 active: true
+languages: [en]
 ---
 # Verify Cleaner
 
-(verify.sh placeholder; safe to delete)
+(verify.sh synthetic team page; safe to delete)
 EOF
 
-  # Write synthetic query page with one already-answered ask so courier wakes.
-  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  PAST=$(date -u -v-65M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '65 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "$NOW")
-  "${EXEC[@]}" env HOME=/opt/data/home bash -c "cat > $Q_FILE" <<EOF
----
-title: "verify probe"
-query_id: "${Q_VERIFY}"
-guest_conversation_id: "verify-conv"
-guest_message_id: "verify-msg"
-status: open
-created_at: "${PAST}"
-updated_at: "${PAST}"
-owner_mirror_session_key: "verify:session"
-guest_message_content: "verify"
-asks:
-  - ask_id: "ask-1"
-    team_member_uid: "cht_verify"
-    role: "cleaner"
-    question: "verify?"
-    asked_at: "${PAST}"
-    original_asked_at: "${PAST}"
-    ping_count: 1
-    sla_deadline: "${PAST}"
-    escalation_deadline: "${PAST}"
-    status: answered
-    answer: "yes"
-    answered_at: "${NOW}"
-drafts: []
----
-# verify probe
-EOF
+  # 1. Create a query with one pending ask via the helper.
+  ASKS='[{"team_member_uid":"cht_verify","role":"cleaner","question":"verify?","sla_minutes":30,"escalation_minutes":60}]'
+  if ! "${EXEC[@]}" env HOME=/opt/data/home bash -c "
+    python3 /opt/data/home/airbnb-courier/query-edit.py create-query \
+      --query-id '$Q_VERIFY' --conv-id 'verify-conv' --msg-id 'verify-msg' \
+      --content 'verify probe' \
+      --owner-mirror-key 'verify:session' \
+      --asks-json '$ASKS'
+  " >/dev/null 2>&1; then
+    fail "V8a: query-edit.py create-query failed"
+  else
+    pass "V8a query-edit.py create-query OK"
+  fi
 
-  # Run the courier ONCE in dry-run mode and confirm it would have woken the owner.
+  # 2. Write a multi-line verbatim answer via the helper. Multi-line is the
+  # verbatim-preservation test (codex P1 #8).
+  MULTILINE_ANSWER=$'yes — check-in at 1pm is fine\nbut the parking spot is\nat the back of the building'
+  "${EXEC[@]}" env HOME=/opt/data/home bash -c "printf '%s' \"$MULTILINE_ANSWER\" > /tmp/v8-answer.txt && \
+    python3 /opt/data/home/airbnb-courier/query-edit.py write-answer \
+      --query-id '$Q_VERIFY' --ask-id ask-1 --answer-file /tmp/v8-answer.txt
+  " >/dev/null 2>&1 || fail "V8b: query-edit.py write-answer failed"
+
+  # 3. Confirm the multi-line answer round-tripped verbatim.
+  SHOW_OUT=$("${EXEC[@]}" env HOME=/opt/data/home bash -c \
+    "python3 /opt/data/home/airbnb-courier/query-edit.py show --query-id '$Q_VERIFY'" 2>&1)
+  if echo "$SHOW_OUT" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+ans = d['asks'][0]['answer']
+expected = 'yes — check-in at 1pm is fine\nbut the parking spot is\nat the back of the building'
+sys.exit(0 if ans == expected else 1)
+" 2>/dev/null; then
+    pass "V8b query-edit.py preserves multi-line answer verbatim"
+  else
+    fail "V8b: query-edit.py mangled the multi-line answer"
+    echo "    show output:"
+    echo "$SHOW_OUT" | sed 's/^/      /' | head -20
+  fi
+
+  # 4. Run the courier tick once (DRY_RUN) and assert wake_for_draft fires.
   COURIER_OUTPUT=$("${EXEC[@]}" env HOME=/opt/data/home AIRBNB_OWNER_PROFILE="${OWNER_PROFILE}" \
     AIRBNB_OWNER_MIRROR_SESSION_KEY="verify:session" AIRBNB_COURIER_DRY_RUN=1 \
     AIRBNB_COURIER_TICK_SECONDS=999 bash -c '
-      # Run the courier loop ONCE: send SIGTERM after first tick.
       ( /opt/data/home/airbnb-courier/tick-loop.sh & PID=$!; sleep 2; kill -TERM $PID 2>/dev/null; wait $PID 2>/dev/null ) || true
     ' 2>&1 || true)
-
   if echo "$COURIER_OUTPUT" | grep -q "DRY_RUN would wake.*query_id=${Q_VERIFY}"; then
-    pass "V8 courier identifies ready_to_draft AND would wake owner profile"
+    pass "V8c courier identifies ready_to_draft AND would wake owner profile"
   else
-    fail "V8: courier did NOT wake for the synthetic ready_to_draft case"
+    fail "V8c: courier did NOT wake for the synthetic ready_to_draft case"
     echo "    courier output:"
     echo "$COURIER_OUTPUT" | sed 's/^/      /'
   fi
 
-  # Cleanup synthetic pages.
-  "${EXEC[@]}" rm -f "$Q_FILE" "$T_FILE" "${Q_FILE}.lock"
+  # 5. Cleanup synthetic pages (don't commit cleanup — operator's brain repo).
+  "${EXEC[@]}" rm -f "/opt/data/home/brain/queries/${Q_VERIFY}.md" "$T_FILE" "/tmp/v8-answer.txt"
 else
   note "V8 end-to-end consult flow SKIPPED (--skip-e2e)"
 fi

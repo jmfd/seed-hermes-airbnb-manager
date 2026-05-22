@@ -8,7 +8,10 @@
 
 services:
   airbnb-courier:
-    image: nousresearch/hermes-agent:latest
+    # Use the same image as the hermes service. HERMES_IMAGE is set by the
+    # operator (or defaults to the official latest tag) so the sidecar tracks
+    # the hermes service's runtime exactly.
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     container_name: ${COMPOSE_PROJECT_NAME:-hermes}-airbnb-courier
     user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
     working_dir: /opt/data
