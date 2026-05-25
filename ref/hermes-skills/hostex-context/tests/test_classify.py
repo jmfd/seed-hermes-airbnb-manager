@@ -92,6 +92,36 @@ def test_pick_live_beats_dead_for_current():
     assert C.pick_relevant_reservation([dead, live], "2026-06-11") is live
 
 
+def test_stay_status_in_house_overrides_future_dates():
+    # early check-in: dates say future, but Hostex says they're physically in_house
+    r = _res(ci="2026-06-20", co="2026-06-23", stay_status="in_house")
+    assert C.classify_guest_state(r, "2026-06-10") == C.CHECKED_IN_MIDSTAY
+
+
+def test_stay_status_in_house_keeps_same_day_states():
+    r = _res(ci="2026-06-10", co="2026-06-13", stay_status="in_house")
+    assert C.classify_guest_state(r, "2026-06-10") == C.ARRIVING_TODAY
+    assert C.classify_guest_state(r, "2026-06-13") == C.CHECKING_OUT_TODAY
+    assert C.classify_guest_state(r, "2026-06-11") == C.CHECKED_IN_MIDSTAY
+
+
+def test_stay_status_completed_overrides_to_past():
+    r = _res(ci="2026-06-10", co="2026-06-13", stay_status="stay_completed")
+    # even mid-window dates yield past_guest once Hostex says the stay completed
+    assert C.classify_guest_state(r, "2026-06-11") == C.PAST_GUEST
+
+
+def test_stay_status_checkin_pending_keeps_calendar_view():
+    r = _res(ci="2026-06-10", co="2026-06-13", stay_status="checkin_pending")
+    assert C.classify_guest_state(r, "2026-06-09") == C.FUTURE_GUEST
+    assert C.classify_guest_state(r, "2026-06-10") == C.ARRIVING_TODAY
+
+
+def test_stay_status_absent_is_pure_date_math():
+    r = _res(ci="2026-06-10", co="2026-06-13")  # no stay_status (DTU / pre-checkin)
+    assert C.classify_guest_state(r, "2026-06-11") == C.CHECKED_IN_MIDSTAY
+
+
 def test_occupancy_prev_free_enables_early_checkin():
     # early check-in on 06-10 depends on the night of 06-09
     o = C.occupancy_adjacency({"2026-06-09": True, "2026-06-10": True}, "2026-06-10")

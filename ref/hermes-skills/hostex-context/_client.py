@@ -97,24 +97,53 @@ class HostexClient:
 
     # -- helpers -----------------------------------------------------------
 
+    @staticmethod
+    def _slug(s) -> str:
+        out = []
+        for ch in str(s or "").lower():
+            out.append(ch if ch.isalnum() else "-")
+        return "-".join(filter(None, "".join(out).split("-")))
+
+    def _property_matches(self, p: dict, token: str) -> bool:
+        """A property matches a token by integer id, DTU slug/hostex_id/listing_id,
+        exact title, or slug-of-title. The last is what makes `--property mtn-home`
+        resolve against REAL Hostex, whose properties have only an integer `id` +
+        `title` (no slug field)."""
+        s = str(token)
+        if s in (str(p.get("id")), str(p.get("hostex_id")), str(p.get("listing_id")), p.get("title")):
+            return True
+        return self._slug(p.get("title")) == self._slug(s)
+
     def resolve_property_id(self, token: str) -> str:
         """Map a slug / title / id to the integer hostex property_id (as str) the
-        real API expects. Falls back to the token itself if no catalog match."""
+        real API expects. Real: property `id` IS the integer. DTU: `hostex_id` is.
+        Falls back to the token itself if no catalog match."""
         if token is None:
             return token
-        s = str(token)
         for p in self.properties():
-            if s in (str(p.get("id")), str(p.get("hostex_id")), str(p.get("listing_id")), p.get("title")):
+            if self._property_matches(p, token):
                 return str(p.get("hostex_id") or p.get("id"))
-        return s
+        return str(token)
 
     def resolve_listing(self, token: str) -> dict:
-        """Return {listing_id, channel_type} for the calendar endpoint."""
-        s = str(token)
+        """Return {listing_id, channel_type} for the calendar endpoint.
+
+        Real Hostex: a property maps to MANY channel listings, found in its
+        `channels[]` ([{channel_type, listing_id, currency}]); the listing_id is
+        channel-specific (NOT the property_id). We pick the first channel. DTU:
+        the property carries a flat listing_id/channel_type. No match ⇒ treat the
+        token itself as a listing_id."""
         for p in self.properties():
-            if s in (str(p.get("id")), str(p.get("hostex_id")), str(p.get("listing_id")), p.get("title")):
-                return {
-                    "listing_id": str(p.get("listing_id") or p.get("hostex_id") or p.get("id")),
-                    "channel_type": p.get("channel_type", "airbnb"),
-                }
-        return {"listing_id": s, "channel_type": "airbnb"}
+            if self._property_matches(p, token):
+                channels = p.get("channels")
+                if isinstance(channels, list) and channels:
+                    c = channels[0]
+                    return {"listing_id": str(c.get("listing_id")),
+                            "channel_type": c.get("channel_type", "airbnb"),
+                            "channels": channels}
+                if p.get("listing_id"):
+                    return {"listing_id": str(p["listing_id"]),
+                            "channel_type": p.get("channel_type", "airbnb")}
+                return {"listing_id": str(p.get("hostex_id") or p.get("id")),
+                        "channel_type": p.get("channel_type", "airbnb")}
+        return {"listing_id": str(token), "channel_type": "airbnb"}

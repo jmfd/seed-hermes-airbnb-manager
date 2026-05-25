@@ -24,11 +24,48 @@ _PENDING_STATUSES = {"wait_accept", "wait_pay"}
 _DEAD_STATUSES = {"cancelled", "denied", "timeout"}
 
 
+def _date_state(ci: str | None, co: str | None, today: str) -> str:
+    """Calendar-derived state from the stay's dates."""
+    if not ci or not co:
+        return CURIOUS_BROWSER
+    if today < ci:
+        return FUTURE_GUEST
+    if today == ci:
+        return ARRIVING_TODAY
+    if ci < today < co:
+        return CHECKED_IN_MIDSTAY
+    if today == co:
+        return CHECKING_OUT_TODAY
+    return PAST_GUEST  # today > co
+
+
+def _reconcile_stay_status(date_state: str, stay_status: str | None) -> str:
+    """Real Hostex carries `stay_status` (the physical truth: did the guest
+    actually check in?). When present it refines the calendar view; when absent
+    (DTU / pure tests) the calendar view stands unchanged.
+
+    - `stay_completed`  → past_guest (they're done, whatever the dates say).
+    - `in_house`        → physically present: keep a same-day state if the dates
+      agree, else checked_in_midstay (covers early check-in / late checkout).
+    - `checkin_pending` → not yet checked in: keep the calendar view.
+    """
+    if not stay_status:
+        return date_state
+    if stay_status == "stay_completed":
+        return PAST_GUEST
+    if stay_status == "in_house":
+        if date_state in (ARRIVING_TODAY, CHECKED_IN_MIDSTAY, CHECKING_OUT_TODAY):
+            return date_state
+        return CHECKED_IN_MIDSTAY
+    return date_state  # checkin_pending or unknown → trust the calendar
+
+
 def classify_guest_state(reservation: dict | None, today: str) -> str:
     """Classify a guest from their most-relevant reservation, as of `today`.
 
     `reservation` is a single Hostex reservation dict, or None when the guest
     has a conversation but no reservation at all. `today` is 'YYYY-MM-DD'.
+    Uses real Hostex `stay_status` to override the calendar view when present.
     """
     if not reservation:
         return CURIOUS_BROWSER
@@ -38,19 +75,9 @@ def classify_guest_state(reservation: dict | None, today: str) -> str:
     if status in _DEAD_STATUSES:
         return CANCELLED
     if status == "accepted":
-        ci = reservation.get("check_in_date")
-        co = reservation.get("check_out_date")
-        if not ci or not co:
-            return CURIOUS_BROWSER
-        if today < ci:
-            return FUTURE_GUEST
-        if today == ci:
-            return ARRIVING_TODAY
-        if ci < today < co:
-            return CHECKED_IN_MIDSTAY
-        if today == co:
-            return CHECKING_OUT_TODAY
-        return PAST_GUEST  # today > co
+        date_state = _date_state(reservation.get("check_in_date"),
+                                 reservation.get("check_out_date"), today)
+        return _reconcile_stay_status(date_state, reservation.get("stay_status"))
     return CURIOUS_BROWSER
 
 

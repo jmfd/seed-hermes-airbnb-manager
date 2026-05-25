@@ -1,5 +1,5 @@
 --- a/seeds/dev-harness/dtu.py	2026-05-25 06:52:43
-+++ b/seeds/dev-harness/dtu.py	2026-05-25 17:15:41
++++ b/seeds/dev-harness/dtu.py	2026-05-25 19:47:25
 @@ -38,6 +38,11 @@
  MESSAGES_FILE = DATA_DIR / "messages.jsonl"
  WEBHOOKS_FILE = DATA_DIR / "webhooks.json"
@@ -84,13 +84,10 @@
      MESSAGES_FILE.write_text("")
      EVENTS_FILE.write_text("")
      _log_event("reset")
-@@ -383,6 +423,273 @@
-     if EVENTS_FILE.exists():
-         return Response(EVENTS_FILE.read_text(), mimetype="text/plain")
-     return Response("", mimetype="text/plain")
-+
-+
-+# ---------------------------------------------------------------------------
+@@ -386,6 +426,301 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
 +# Reservations / calendar / availability (ADDITIVE — hostex-context lane).
 +#
 +# Hostex is the single source of truth: these views are COMPUTED live from
@@ -203,10 +200,10 @@
 +        res = [r for r in res if r.get("check_out_date", "") <= eco]
 +    order_by = request.args.get("order_by", "booked_at")
 +    res = sorted(res, key=lambda r: r.get(order_by, "") or "", reverse=True)
-+    total = len(res)
 +    offset = int(request.args.get("offset", "0"))
 +    limit = int(request.args.get("limit", "20"))
-+    return jsonify({"data": {"reservations": res[offset:offset + limit], "total": total}})
++    # Real Hostex /v3/reservations returns data.{reservations} with NO `total`.
++    return jsonify({"data": {"reservations": res[offset:offset + limit]}})
 +
 +
 +@app.route("/v3/listings/calendar", methods=["POST"])
@@ -274,10 +271,23 @@
 +        abort(400, description="missing check_in_date/check_out_date")
 +    now = _now_iso()
 +    code = body.get("reservation_code") or _new_id("RES")
++    status_val = body.get("status", "accepted")
++    # stay_status mirrors real Hostex (checkin_pending | in_house | stay_completed |
++    # null). Settable via body; otherwise derived from status + dates vs today.
++    if "stay_status" in body:
++        stay_status = body.get("stay_status")
++    elif status_val != "accepted":
++        stay_status = None
++    else:
++        today = datetime.now(timezone.utc).date().isoformat()
++        stay_status = ("checkin_pending" if today < ci
++                       else "in_house" if ci <= today < co
++                       else "stay_completed")
 +    rec = {
 +        "reservation_code": code,
 +        "stay_code": code,
-+        "status": body.get("status", "accepted"),
++        "status": status_val,
++        "stay_status": stay_status,
 +        "channel_type": body.get("channel_type", prop.get("channel_type", "airbnb")),
 +        "channel_id": body.get("channel_id") or code,
 +        "property_id": prop.get("hostex_id") or prop["id"],
@@ -294,13 +304,28 @@
 +        "guest_phone": body.get("guest_phone"),
 +        "guest_email": body.get("guest_email"),
 +        "conversation_id": body.get("conversation_id"),
++        "creator": body.get("creator", "System"),
 +        "booked_at": body.get("booked_at", now),
 +        "created_at": now,
 +        "cancelled_at": None,
 +        "remarks": body.get("remarks", ""),
++        "channel_remarks": body.get("channel_remarks", ""),
 +        "tags": body.get("tags", []),
-+        "check_in_details": {"arrival_at": None, "departure_at": None, "lock_code": body.get("lock_code")},
-+        "guests": [],
++        "custom_channel": body.get("custom_channel"),
++        "custom_fields": body.get("custom_fields"),
++        "in_reservation_box": body.get("in_reservation_box", False),
++        "additional_fees": body.get("additional_fees", []),
++        "rates": body.get("rates", {}),
++        "check_in_details": {
++            "arrival_at": None,
++            "departure_at": None,
++            "lock_code": body.get("lock_code"),
++            "lock_code_visible_after": None,
++            "deposit": 0,
++            "id_required": None,
++            "check_in_guide_url": None,
++        },
++        "guests": body.get("guests", []),
 +    }
 +    reservations = [r for r in _load_list(RESERVATIONS_FILE) if r.get("reservation_code") != code]
 +    reservations.append(rec)
@@ -355,10 +380,13 @@
 +    _log_event("block_added", property_slug=prop["id"], start_date=sd, end_date=ed)
 +    _fanout_webhooks({"event": "availability_updated", "property_id": block["property_id"], "timestamp": now})
 +    return jsonify({"data": block})
- 
- 
++
++
++# ---------------------------------------------------------------------------
+ # UI — vanilla JS, polls every 3s, compose form posts to /admin/guest-send.
  # ---------------------------------------------------------------------------
-@@ -640,6 +947,8 @@
+ 
+@@ -640,6 +975,8 @@
              MESSAGES_FILE=DATA_DIR / "messages.jsonl",
              WEBHOOKS_FILE=DATA_DIR / "webhooks.json",
              EVENTS_FILE=DATA_DIR / "events.jsonl",
@@ -367,7 +395,7 @@
          )
      _ensure_data_dir()
      print(f"DTU listening on http://127.0.0.1:{PORT}")
-@@ -757,8 +1066,48 @@
+@@ -757,8 +1094,49 @@
              return resp.read().decode("utf-8")
      except urllib.error.URLError as e:
          sys.exit(f"connection error to {url}: {e}")
@@ -385,12 +413,13 @@
 +        "number_of_guests": args.guests,
 +    }
 +    for k, v in (("reservation_code", args.code), ("conversation_id", args.conv),
-+                 ("guest_name", args.guest_name), ("channel_type", args.channel_type)):
++                 ("guest_name", args.guest_name), ("channel_type", args.channel_type),
++                 ("stay_status", args.stay_status)):
 +        if v:
 +            body[k] = v
 +    print(json.dumps(_http("POST", "/admin/reservation", body)["data"]))
-+
-+
+ 
+ 
 +def cli_reservation_list(args: argparse.Namespace) -> None:
 +    qs = "?limit=100" + (f"&property_id={args.property}" if args.property else "")
 +    rs = _http("GET", "/v3/reservations" + qs)["data"]["reservations"]
@@ -400,8 +429,8 @@
 +    for r in rs:
 +        print(f"{r['reservation_code']}\t{r['status']}\t{r.get('property_slug', '')}\t"
 +              f"{r['check_in_date']}→{r['check_out_date']}\t{r.get('guest_name') or ''}")
- 
- 
++
++
 +def cli_reservation_cancel(args: argparse.Namespace) -> None:
 +    print(json.dumps(_http("POST", "/admin/reservation/cancel", {"reservation_code": args.code})["data"]))
 +
@@ -416,7 +445,7 @@
  def main() -> None:
      parser = argparse.ArgumentParser(prog="dtu", description="Digital Twin Universe of hostex.io")
      sub = parser.add_subparsers(dest="cmd", required=True)
-@@ -800,6 +1149,31 @@
+@@ -800,6 +1178,33 @@
      wp = ws.add_parser("rm"); wp.add_argument("webhook_id"); wp.set_defaults(func=cli_webhook_rm)
      ws.add_parser("test").set_defaults(func=cli_webhook_test)
  
@@ -432,6 +461,8 @@
 +    ra.add_argument("--conv")
 +    ra.add_argument("--guest-name", dest="guest_name")
 +    ra.add_argument("--channel-type", dest="channel_type")
++    ra.add_argument("--stay-status", dest="stay_status",
++                    help="checkin_pending|in_house|stay_completed (else derived)")
 +    ra.set_defaults(func=cli_reservation_add)
 +    rl = rs.add_parser("list"); rl.add_argument("--property"); rl.set_defaults(func=cli_reservation_list)
 +    rc = rs.add_parser("cancel"); rc.add_argument("--code", required=True); rc.set_defaults(func=cli_reservation_cancel)

@@ -66,6 +66,7 @@ def _normalize_reservation(r: dict) -> dict:
     return {
         "reservation_code": r.get("reservation_code"),
         "status": r.get("status"),
+        "stay_status": r.get("stay_status"),
         "check_in_date": r.get("check_in_date"),
         "check_out_date": r.get("check_out_date"),
         "nights": _nights(r.get("check_in_date"), r.get("check_out_date")),
@@ -90,14 +91,22 @@ def _nights(ci: str | None, co: str | None) -> int | None:
 
 def cmd_calendar(args) -> int:
     client = _client(args)
-    listing = client.resolve_listing(args.property)
-    cal_listings = client.listing_calendar([listing], args.start, args.end)
-    price_by_date = {}
-    for L in cal_listings:
-        for c in L.get("calendar", []):
-            price_by_date[c["date"]] = {"price": c.get("price"), "inventory": c.get("inventory"),
-                                        "restrictions": c.get("restrictions")}
+    # Authoritative booked/free/blocked comes from /v3/availabilities (property
+    # level, integer property_id) — works identically on real Hostex and DTU.
     avail = _avail_map(client, args.property, args.start, args.end)
+    # Price is best-effort enrichment via /v3/listings/calendar. Real Hostex
+    # listing_id is channel-specific (resolved from the property's channels[]);
+    # if it can't be resolved or the call fails, price degrades to null.
+    price_by_date = {}
+    listing_used = None
+    try:
+        listing = client.resolve_listing(args.property)
+        listing_used = {"listing_id": listing["listing_id"], "channel_type": listing["channel_type"]}
+        for L in client.listing_calendar([listing_used], args.start, args.end):
+            for c in L.get("calendar", []):
+                price_by_date[c["date"]] = {"price": c.get("price"), "restrictions": c.get("restrictions")}
+    except HostexError:
+        pass
     days = []
     for d in _date_list(args.start, args.end):
         a = avail.get(d, {})
@@ -114,6 +123,7 @@ def cmd_calendar(args) -> int:
     booked = sum(1 for x in days if x["status"] == "booked")
     blocked = sum(1 for x in days if x["status"] == "blocked")
     _emit({"property": args.property, "start": args.start, "end": args.end,
+           "price_listing": listing_used,
            "summary": {"booked": booked, "blocked": blocked, "free": len(days) - booked - blocked},
            "days": days})
     return 0
@@ -130,7 +140,12 @@ def cmd_reservations(args) -> int:
         res = [r for r in res if (r.get("check_in_date") or "") >= args.start_date]
     if args.end_date:
         res = [r for r in res if (r.get("check_in_date") or "") <= args.end_date]
+    if args.upcoming:
+        today = _today(args)
+        res = [r for r in res if (r.get("check_in_date") or "") >= today]
     res = sorted(res, key=lambda r: r.get("check_in_date") or "")
+    if args.limit:
+        res = res[:args.limit]
     _emit({"property": args.property, "count": len(res),
            "reservations": [_normalize_reservation(r) for r in res]})
     return 0
@@ -226,6 +241,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--from", dest="start_date")
     r.add_argument("--to", dest="end_date")
     r.add_argument("--status")
+    r.add_argument("--upcoming", action="store_true", help="only check-ins on/after today")
+    r.add_argument("--limit", type=int, help="cap results after sort (e.g. next-3-bookings)")
+    r.add_argument("--asof")
     r.set_defaults(func=cmd_reservations)
 
     g = sub.add_parser("guest-state")

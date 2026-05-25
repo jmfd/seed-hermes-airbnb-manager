@@ -32,6 +32,25 @@
   UI is changed; absent data files yield empty results, so other lanes' DTUs are
   unaffected.
 
+### Hardened against real api.hostex.io (DTU-vs-real divergence audit)
+
+All five tools were run against the live Hostex API and reconciled with the DTU
+stub (see PR description for the full audit). Fixes:
+- **`stay_status`** (`checkin_pending`/`in_house`/`stay_completed`) — real Hostex's
+  authoritative occupancy signal. Now classified (overrides calendar dates for
+  early check-in / late checkout) and stubbed in the DTU.
+- **Property resolution** — real `/v3/properties` keys on the integer `id` (no
+  slug); `--property mtn-home` now resolves via slug-of-title, working on both
+  real and DTU.
+- **Channel-specific `listing_id`** — real listing ids live in the property's
+  `channels[]` (one property → many channel listings); `calendar` now leads
+  booked/free from `/v3/availabilities` (property-level) and treats listing price
+  as best-effort enrichment.
+- **No `total`** in real `/v3/reservations`; DTU response corrected to match.
+- DTU reservation records extended (`stay_status`, `creator`, `rates`,
+  `channel_remarks`, fuller `check_in_details`, …) to mirror real shape.
+- `reservations --upcoming --limit N` added (the "next N bookings" scenario).
+
 ## 0.1.0
 
 - Initial airbnb-coordinator boss + team-listener + courier sidecar seed.
