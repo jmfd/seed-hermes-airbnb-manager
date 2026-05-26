@@ -239,18 +239,19 @@ gate, and runs as a script.
 
 - **Skill + courier integration → `plow-pbc/seed-hermes-airbnb-manager`** (the boss seed; default branch `main`) as
   `skills/hostex-context/` plus the static-fact deferral edits.
-- **DTU additions →** no standalone DTU repo exists; `dtu.py` is bundled inside a seed (it references
-  `seeds/wire-samples/hostex-*.json`). Candidates: `seed-hermes-airbnb-manager` or `seed-hostex-history-ingest`.
-  I will `grep` for `dtu.py` across both at build start and target whichever ships it (Open Question Q1 — narrowed).
+- **DTU → vendored as real code in THIS repo** at `ref/dev-harness/dtu.py` (RESOLVED). No standalone DTU repo
+  exists and `seedlab` is not a reachable GitHub org, so the canonical home for the project's DTU is this seed —
+  the one whose skill needs the endpoints. The full `dtu.py` (with the reservation/calendar/availability endpoints +
+  CLI seeding verbs) ships here as runnable Python, not a patch. The skill needs the endpoint ⇒ the project
+  implements the endpoint.
 - I default to extending the existing seed(s); a brand-new seed repo does **not** look warranted by current scope.
 
 ---
 
 ## 11. Open questions for the CEO (the only gates I need answered)
 
-- **Q1.** (Narrowed) `dtu.py` is bundled in a seed, not a standalone repo. I'll grep `seed-hermes-airbnb-manager`
-  vs `seed-hostex-history-ingest` at build start and target whichever ships it — unless you already know which, or
-  want the DTU change isolated to its own PR.
+- **Q1.** (RESOLVED) `dtu.py` is in no git repo and `seedlab` is not a reachable GitHub org, so the DTU is vendored
+  into this seed as real code at `ref/dev-harness/dtu.py` — the project that needs the endpoints implements them.
 - **Q2.** `dtu.py` is shared across all three lanes' DTUs. Confirm additive-only edits to the shared file are
   acceptable (my analysis: fully backward-compatible), or do you want a forked `dtu-hostex.py` for this lane only?
 - **Q3.** OK with the id/slug fidelity recommendation in §6 (records carry both; endpoints accept either; tools use

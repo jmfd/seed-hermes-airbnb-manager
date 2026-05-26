@@ -1,47 +1,62 @@
-# dev-harness — DTU additive endpoints for hostex-context
+# dev-harness — DTU (Digital Twin of hostex.io)
 
-The `hostex-context` skill reads live calendar / reservation / availability state
-from Hostex. For local + CI testing we point `HOSTEX_BASE_URL` at the **DTU**
-(Digital Twin of hostex.io), whose canonical source is
-`seedlab/seeds/dev-harness/dtu-hostex.seed.md`. The DTU today stubs only
-properties + conversations + messages + webhooks.
+`dtu.py` is the **Digital Twin** of `api.hostex.io`: a single-file Flask app that
+serves a hostex-compatible HTTP API (and a small web UI) from local JSON state.
+It is the test stand-in for live Hostex — point `HOSTEX_BASE_URL` at it and the
+same agent/skill code that talks to real Hostex works unchanged.
 
-`dtu-hostex-endpoints.diff` is the **additive** patch that teaches the DTU the
-read endpoints `hostex-context` needs, plus admin/CLI verbs for scripted seeding.
+**This is the real implementation, not a patch.** The `hostex-context` skill
+needs calendar / reservation / availability endpoints, so this project
+implements them — here, as runnable Python. There is no diff-for-another-team.
 
-## What the patch adds (and nothing else)
+## Endpoints (wire shapes mirror real api.hostex.io)
 
-- `GET  /v3/reservations` — filterable reservation list, real-Hostex wire shape.
-- `POST /v3/listings/calendar` — per-night price + inventory + restrictions.
-- `GET  /v3/availabilities` — per-night `{available, remarks}` (the maintenance/
-  blocked-date signal).
-- `/admin/reservation`, `/admin/reservation/cancel`, `/admin/block` + the CLI
-  verbs `dtu reservation add|list|cancel` and `dtu block add` for test seeding.
-- Lazy `reservations.json` / `blocks.json`; `hostex_id` / `listing_id` stamped
-  onto the property catalog (int↔slug map); `/admin/reset` + webhook fanout
-  extended to the new event types.
+Read (used by `hostex-context`):
+- `GET  /v3/reservations` — filter by `property_id` (int **or** slug), `status`,
+  `reservation_code`, `start/end_check_in_date`, `start/end_check_out_date`,
+  `offset/limit`. Reservation objects carry the real fields incl. `stay_status`
+  (`checkin_pending`/`in_house`/`stay_completed`), `check_in_details`, `rates`.
+- `POST /v3/listings/calendar` — per-night `{date, price, inventory, restrictions}`.
+- `GET  /v3/availabilities` — per-night `{date, available, remarks}` (the
+  maintenance / blocked-date signal). Authoritative booked/free source.
+- `GET  /v3/properties`, `GET /v3/conversations[/{id}]`, `/v3/webhooks` — pre-existing.
 
-## Backward compatibility (verified)
+Admin / test-seeding (DTU-only; real Hostex is read-only at draft time):
+- `POST /admin/reservation`, `POST /admin/reservation/cancel`, `POST /admin/block`
+- `POST /admin/reset`, `POST /admin/guest-send`, `GET /admin/events`
 
-The diff is **purely additive** — it introduces new routes, helpers, CLI verbs,
-and lazily-created data files. It changes no existing route, response shape, or
-the UI. Absent data files ⇒ endpoints return empty, so other lanes' DTUs (which
-share the same `dtu.py` with their own data dirs) are unaffected. Confirm with:
-
-```sh
-grep -E '^-' dtu-hostex-endpoints.diff | grep -vE '^--- '   # → no output
+CLI verbs (thin HTTP clients over the admin routes — used for scripted seeding):
+```
+dtu reservation add  --property <slug|id> --check-in D1 --check-out D2 \
+                     [--status accepted] [--stay-status …] [--conv C] [--guest-name N]
+dtu reservation list [--property …]
+dtu reservation cancel --code …
+dtu block add        --property <slug|id> --start D1 --end D2 [--remarks "deep clean"]
 ```
 
-## Applying
-
-Against a checkout of the canonical DTU:
+## Run
 
 ```sh
-cd <seedlab>/seeds/dev-harness
-patch -p1 < <this-repo>/ref/dev-harness/dtu-hostex-endpoints.diff
-# restart only your instance: <python-with-flask> dtu.py serve --port <port>
+# venv with flask (the repo's harness venv, or any python3 + flask)
+DTU_DATA_DIR=~/.dtu-hostex/data python3 ref/dev-harness/dtu.py serve --port 8082
 ```
+Each instance is one process with its own `--port` + `DTU_DATA_DIR`; the same
+`dtu.py` file backs every instance. Data files (`reservations.json`,
+`blocks.json`, …) are created lazily in the data dir.
 
-The patch targets `b/seeds/dev-harness/dtu.py`. Night model and full endpoint
-contracts are documented in
-`ref/hermes-skills/hostex-context/reference/hostex-api.md`.
+## Night model
+A reservation occupies nights `[check_in_date, check_out_date)` (the checkout
+day's night is free — guest departs that morning). A host block occupies
+`[start_date, end_date]` inclusive. Early check-in on D depends on the night of
+D-1; late checkout on D depends on the night of D.
+
+## Backward compatibility
+The reservation/calendar/availability routes + CLI verbs were added without
+changing any pre-existing route, response shape, or the UI. Absent data files
+yield empty results, so an instance pointed at a data dir with no reservations
+simply returns empty arrays. Validated against real `api.hostex.io` (PR #4
+divergence audit); shapes reconciled with reality.
+
+Full endpoint contracts + the guest-state model:
+`ref/hermes-skills/hostex-context/reference/hostex-api.md` and `…/guest-state.md`.
+End-to-end validation harness: `ref/hermes-skills/hostex-context/tests/validate.sh`.

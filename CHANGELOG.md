@@ -25,12 +25,13 @@
   (`^act-hostex-context-install`); `verify.sh` gains check **V3f**; SEED.md gains
   `^obj-hostex-context-installed`, `^act-boss-hostex-context`, and
   `^v-hostex-context`.
-- `ref/dev-harness/dtu-hostex-endpoints.diff` — **additive** DTU patch adding
-  `GET /v3/reservations`, `POST /v3/listings/calendar`, `GET /v3/availabilities`,
-  and `/admin` + CLI seeding verbs (`dtu reservation add|list|cancel`,
-  `dtu block add`). Backward-compatible: no existing route, response shape, or the
-  UI is changed; absent data files yield empty results, so other lanes' DTUs are
-  unaffected.
+- `ref/dev-harness/dtu.py` — the DTU (Digital Twin of hostex.io) **as real,
+  runnable code in this project** (not a patch). Implements `GET /v3/reservations`,
+  `POST /v3/listings/calendar`, `GET /v3/availabilities`, and `/admin` + CLI
+  seeding verbs (`dtu reservation add|list|cancel`, `dtu block add`).
+  Backward-compatible: no pre-existing route, response shape, or the UI changed;
+  absent data files yield empty results. This is the canonical DTU source for the
+  project — the skill needs these endpoints, so the project ships them.
 
 ### Hardened against real api.hostex.io (DTU-vs-real divergence audit)
 
