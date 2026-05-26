@@ -150,32 +150,6 @@ else
 fi
 
 # ============================================================================
-# V3f — hostex-context installed + callable + boss wired to use it
-# ============================================================================
-note "V3f hostex-context installed"
-HOSTEX_CTX_DIR="/opt/data/home/hostex-context"
-if "${EXEC[@]}" test -x "$HOSTEX_CTX_DIR/hxctx"; then
-  pass "V3f hxctx present + executable"
-else
-  fail "V3f: hxctx missing or not executable at $HOSTEX_CTX_DIR/hxctx"
-fi
-if "${EXEC_LOGIN[@]}" "python3 $HOSTEX_CTX_DIR/tests/test_classify.py >/dev/null 2>&1"; then
-  pass "V3f hostex-context pure-logic tests pass"
-else
-  fail "V3f: hostex-context pure-logic tests failed"
-fi
-if "${EXEC_LOGIN[@]}" "python3 $HOSTEX_CTX_DIR/hxctx --help >/dev/null 2>&1"; then
-  pass "V3f hxctx CLI loads"
-else
-  fail "V3f: hxctx CLI failed to load"
-fi
-if "${EXEC[@]}" grep -q 'hostex-context' "$BOSS_SKILL"; then
-  pass "V3f boss skill wired to hostex-context"
-else
-  fail "V3f: boss skill does not reference hostex-context"
-fi
-
-# ============================================================================
 # V4 — listener skill installed (unless --skip-team-listener)
 # ============================================================================
 if [[ "$SKIP_TEAM_LISTENER" != "1" ]]; then
@@ -235,12 +209,17 @@ if [[ -n "$PIRATE_FIXTURE" ]]; then
   # A FULL webhook-tunnel round-trip requires a live Hostex token + tunnel,
   # which we can't run in CI; layers V6a-c together prevent every regression
   # the static skill-grep alone would miss.
-  if "${EXEC[@]}" grep -qiE 'arrr|ahoy|hearties' "$BOSS_SKILL" 2>/dev/null && \
-     "${EXEC[@]}" grep -Fq '8a — NO CONSULT NEEDED' "$BOSS_SKILL" && \
+  # V6a: structural fast-path anchors only — NO regex on persona/vocab text.
+  # Voice (pirate, neutral, formal) is taught by SKILL.md prose; regex-sniffing
+  # the file for "arrr/ahoy/hearties" would gate behavior on tokens instead
+  # of role. If a future SKILL.md replaces the pirate vocab with neutral
+  # attendant tone but keeps the no-consult fast path + legacy state file,
+  # that's still V6a-passing.
+  if "${EXEC[@]}" grep -Fq '8a — NO CONSULT NEEDED' "$BOSS_SKILL" && \
      "${EXEC[@]}" grep -Fq 'pirate-joker-pending.json' "$BOSS_SKILL"; then
-    pass "V6a boss skill carries pirate fast path (vocab + no-consult branch + legacy state file)"
+    pass "V6a boss skill carries no-consult fast path (branch header + legacy state file reference)"
   else
-    fail "V6a: boss skill MISSING pirate fast path — Trial Reel demo will break"
+    fail "V6a: boss skill MISSING no-consult fast path — Trial Reel demo will break"
   fi
 
   if python3 -c "

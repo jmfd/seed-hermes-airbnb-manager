@@ -34,6 +34,15 @@ Subcommands (all take --brain-dir, default /opt/data/home/brain):
   mark-approved --query-id ID --draft-id D
   mark-rejected --query-id ID --draft-id D
   mark-delivered --query-id ID --draft-id D [--close]   # --close sets status=closed
+  mark-auto-shipped --query-id ID --draft-id D          # partial sent to guest without owner approval
+
+  latest-pending-approve [--kind final]
+      # Read-only: scan queries/q-*.md and emit JSON for the SINGLE most-recent
+      # draft where mirrored_to_owner_at is set, approved_at/rejected_at/
+      # delivered_at are NOT set, and (default) kind == 'final'. Used by the
+      # boss skill's approve session to find which draft the owner is approving
+      # WITHOUT requiring the owner to type the draft_id verbatim. Emits {} on
+      # no match (caller treats as 'nothing pending').
 
   tick   # courier per-tick processing; mutates pages in-place, emits actions to stdout
 
@@ -436,6 +445,74 @@ def cmd_mark_delivered(args, brain_dir):
     _mark_field(args, brain_dir, "delivered_at", "delivered", close_on_set=True)
 
 
+def cmd_mark_auto_shipped(args, brain_dir):
+    """Mark a PARTIAL draft as auto-shipped to the guest (no owner approval).
+
+    Distinct from mark-delivered because the partial path has no approve gate:
+    auto_shipped_to_guest_at records that the courtesy ack went out, while
+    delivered_at + approved_at stay reserved for the FINAL draft owner-approve
+    path. The boss skill's owner-mirror reads this field to confirm "what
+    actually shipped to the guest" in 8b.6.
+    """
+    _mark_field(args, brain_dir, "auto_shipped_to_guest_at", "auto-shipped")
+
+
+def cmd_latest_pending_approve(args, brain_dir):
+    """Find the single most-recent kind=final draft awaiting owner approval.
+
+    Recency-matching helper for the v12.1 attendant UX: the owner-mirror
+    message no longer carries query_id / draft_id, so the approve session
+    needs a way to figure out WHICH draft the owner just said 'approve' to.
+
+    Algorithm:
+      For each queries/q-*.md, parse frontmatter. For each draft d in drafts[]:
+        - require d.kind == args.kind (default 'final')
+        - require d.mirrored_to_owner_at is set (truthy)
+        - require d.approved_at NOT set
+        - require d.rejected_at NOT set
+        - require d.delivered_at NOT set
+      Sort all qualifying drafts by mirrored_to_owner_at DESCENDING. Emit
+      JSON for the first (most-recent).
+      If no candidates, emit '{}' (empty object) and exit 0 — the boss
+      treats empty as "nothing pending; ask the owner to clarify".
+
+    Output JSON keys when match found:
+      {"query_id": "...", "draft_id": "...", "conversation_id": "...",
+       "content": "...", "kind": "...", "mirrored_to_owner_at": "..."}
+    """
+    kind = getattr(args, "kind", "final") or "final"
+    queries_dir = brain_dir / "queries"
+    if not queries_dir.is_dir():
+        print("{}")
+        return
+    candidates = []
+    for path in sorted(queries_dir.glob("q-*.md")):
+        try:
+            fm, _ = read_page(path)
+        except SystemExit:
+            continue
+        for d in fm.get("drafts", []) or []:
+            if d.get("kind") != kind:
+                continue
+            if not d.get("mirrored_to_owner_at"):
+                continue
+            if d.get("approved_at") or d.get("rejected_at") or d.get("delivered_at"):
+                continue
+            candidates.append({
+                "query_id": fm.get("query_id"),
+                "draft_id": d.get("draft_id"),
+                "conversation_id": fm.get("guest_conversation_id"),
+                "content": d.get("content"),
+                "kind": d.get("kind"),
+                "mirrored_to_owner_at": d.get("mirrored_to_owner_at"),
+            })
+    if not candidates:
+        print("{}")
+        return
+    candidates.sort(key=lambda c: c["mirrored_to_owner_at"], reverse=True)
+    print(json.dumps(candidates[0]))
+
+
 def cmd_show(args, brain_dir):
     path = query_path(brain_dir, args.query_id)
     fm, _ = read_page(path)
@@ -533,6 +610,17 @@ def cmd_tick(args, brain_dir):
                 "query_id": fm["query_id"],
                 "file": str(path),
             }))
+        # Also emit mirror_now for any drafts that exist but were never
+        # mirrored to the owner channel — recovers from a failed mirror call
+        # (e.g., transient Plow API outage). Idempotent: handler POSTs +
+        # marks mirrored; subsequent ticks see mirrored_to_owner_at set and skip.
+        for d in drafts:
+            if not d.get("mirrored_to_owner_at"):
+                print(json.dumps({
+                    "action": "mirror_now",
+                    "query_id": fm["query_id"],
+                    "draft_id": d.get("draft_id"),
+                }))
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +674,7 @@ def build_parser():
         ("mark-mirrored", cmd_mark_mirrored),
         ("mark-approved", cmd_mark_approved),
         ("mark-rejected", cmd_mark_rejected),
+        ("mark-auto-shipped", cmd_mark_auto_shipped),
     ]:
         s = sub.add_parser(name)
         s.add_argument("--query-id", required=True)
@@ -601,6 +690,10 @@ def build_parser():
     s = sub.add_parser("show")
     s.add_argument("--query-id", required=True)
     s.set_defaults(func=cmd_show)
+
+    s = sub.add_parser("latest-pending-approve")
+    s.add_argument("--kind", default="final", choices=["final", "partial", "escalate-notice"])
+    s.set_defaults(func=cmd_latest_pending_approve)
 
     s = sub.add_parser("tick")
     s.add_argument("--sla-minutes", default=os.environ.get("AIRBNB_COURIER_SLA_MINUTES", "30"))

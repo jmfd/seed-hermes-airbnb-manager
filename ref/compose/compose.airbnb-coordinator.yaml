@@ -1,16 +1,90 @@
 # Compose override added by seed-hermes-airbnb-manager.
-# Adds one sidecar service `airbnb-courier` to the seed-hermes scaffold.
-# The sidecar runs the courier tick loop that re-pings stale team-member
-# asks and wakes the owner Hermes profile to draft replies.
+#
+# Adds THREE sidecar services to the seed-hermes scaffold:
+#
+#   1. hermes-daniel       — gateway for the OWNER profile (boss skill).
+#                            Binds the webhook adapter on host 127.0.0.1:8787 so
+#                            Hostex callbacks (or a local DTU) can POST inbound.
+#   2. hermes-daniel-team  — gateway for the TEAM-LISTENER profile (listener skill).
+#                            plow_chat WSS-only, no host port binding needed.
+#   3. airbnb-courier      — the courier tick loop that re-pings stale asks,
+#                            escalates at SLA, and wakes the owner gateway when
+#                            a query is ready to draft a reply.
+#
+# Why per-profile gateway sidecars (not just `hermes -p <profile> gateway run`
+# inside the main `hermes` container)?
+#   Hermes' container PID 1 runs ONE gateway (the default profile). Background
+#   processes spawned via `docker exec -d ... hermes -p <profile> gateway run`
+#   die on every `docker compose up -d --force-recreate` — silently, with no
+#   error message. The install becomes broken without anyone noticing until
+#   the next webhook arrives and nothing happens. Compose services with
+#   restart:unless-stopped survive recreates by design — this is the
+#   reproducibility floor.
 #
 # Loaded via COMPOSE_FILE=compose.yaml:[...]:compose.airbnb-coordinator.yaml
 # in <scaffold>/.env (the install script writes this).
 
 services:
+  hermes-daniel:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-daniel
+    user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
+    working_dir: /opt/data
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_YOLO_MODE: "1"
+    env_file:
+      - ./data/.env
+      - ./data/profiles/daniel/.env
+    volumes:
+      - ./data:/opt/data
+    ports:
+      # Webhook adapter — bound to host loopback only.
+      # The daniel profile owns the Hostex webhook subscription;
+      # this is the port DTU (and real Hostex via tunnel) POSTs to.
+      - "127.0.0.1:${HERMES_WEBHOOK_PORT:-8787}:8787"
+    depends_on:
+      - hermes
+    restart: unless-stopped
+    # Wrap with symlink so the courier's bash -lc 'hermes ...' calls work
+    # inside this container too (gbrain installer already does this for gbrain).
+    command:
+      - bash
+      - -c
+      - |
+        ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
+        # Ensure PyYAML for query-edit.py — apt is the only reliable path
+        # (the container has no pip on PATH).
+        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
+          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        exec /opt/hermes/.venv/bin/hermes -p daniel gateway run
+
+  hermes-daniel-team:
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-daniel-team
+    user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
+    working_dir: /opt/data
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_YOLO_MODE: "1"
+    env_file:
+      - ./data/.env
+      - ./data/profiles/daniel-team/.env
+    volumes:
+      - ./data:/opt/data
+    depends_on:
+      - hermes
+    restart: unless-stopped
+    command:
+      - bash
+      - -c
+      - |
+        ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
+        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
+          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        exec /opt/hermes/.venv/bin/hermes -p daniel-team gateway run
+
   airbnb-courier:
-    # Use the same image as the hermes service. HERMES_IMAGE is set by the
-    # operator (or defaults to the official latest tag) so the sidecar tracks
-    # the hermes service's runtime exactly.
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
     container_name: ${COMPOSE_PROJECT_NAME:-hermes}-airbnb-courier
     user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
@@ -23,23 +97,23 @@ services:
       HOME: /opt/data/home
     env_file:
       # Sidecar-only config — secret keys for plow_chat re-pings.
-      # Written by the install script with mode 600 in the host bind-mount.
       - ./data/.airbnb-courier.env
     volumes:
       - ./data:/opt/data
     depends_on:
       - hermes
+      - hermes-daniel
     restart: unless-stopped
-    # PID 1 of the sidecar; runs the tick loop forever. Compose's
-    # restart:unless-stopped covers crash recovery.
+    # PID 1 = bootstrap (PyYAML + hermes symlink) then exec tick loop.
     command:
       - bash
-      - -lc
-      - /opt/data/home/airbnb-courier/tick-loop.sh
+      - -c
+      - |
+        ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
+        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
+          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        exec /opt/data/home/airbnb-courier/tick-loop.sh
     healthcheck:
-      # The courier prints a line to stdout each tick; the healthcheck
-      # just confirms the process is alive. Compose logs are the real
-      # diagnostic surface.
       test: ["CMD", "pgrep", "-f", "tick-loop.sh"]
       interval: 60s
       timeout: 5s

@@ -181,18 +181,63 @@ if [[ "$SKIP_OWNER_WEBHOOK_CHECK" != "1" ]]; then
   fi
 fi
 
+echo "   - Codex OAuth credential is wired into Hermes (boss + distiller require it)"
+# All seed profiles default to model.provider=openai-codex / default=gpt-5.5.
+# Without a Codex OAuth credential in Hermes' pooled vault, the FIRST LLM-
+# invoking call (boss webhook, distiller backfill) fails with:
+#   "No Codex credentials stored. Run hermes auth to authenticate."
+# The distiller failure is SILENT in stdout (backfill returns processed=0
+# with no facts written). Catching it at install time = caught before any
+# downstream work depends on it. There is NO API-key fallback in this seed —
+# either Codex OAuth is wired or we stop.
+if ! "${EXEC[@]}" bash -lc "hermes auth list 2>&1 | grep -qE 'openai-codex \([1-9][0-9]* credentials\)'"; then
+  echo "FAIL: Hermes has no openai-codex OAuth credential stored." >&2
+  echo "      Run the canonical auth flow from the seed-hermes scaffold:" >&2
+  echo "        cd ${SCAFFOLD_DIR%/}" >&2
+  echo "        ./scripts/auth-openai-codex.sh" >&2
+  echo "      The wrapper invokes 'docker compose run --rm -T hermes auth add openai-codex'" >&2
+  echo "      and walks you through the device-code OAuth flow (browser approval required)." >&2
+  echo "      Verify with: docker compose run --rm -T hermes auth list" >&2
+  echo "      Expected: 'openai-codex (1 credentials)'." >&2
+  echo "      See seed-hermes/SEED.md §act-openai-codex-auth for the full spec." >&2
+  echo "      There is no API-key fallback — Codex OAuth is required by this seed." >&2
+  exit 1
+fi
+
 if [[ "$SKIP_TEAM_LISTENER" == "1" ]]; then
   echo ">>> --skip-team-listener: will install boss + courier only; team profile NOT created."
 fi
 
 # Ensure PyYAML is available in the container (query-edit.py needs it).
+# The container has no `pip` on the user-PATH (only /opt/hermes/.venv/bin/pip,
+# which doesn't exist on the official image's Debian layer). apt is the only
+# reliable path. Also installs python3-yaml in the courier sidecar container
+# (separate apt state) when its command-prefix runs at first boot.
+echo "   - HOSTEX_ACCESS_TOKEN available (operator env or ingest sidecar env_file)"
+INGEST_ENV_HOST_PRE="${SCAFFOLD_DIR%/}/data/.hostex-ingest.env"
+HXT_PRE="${HOSTEX_ACCESS_TOKEN:-}"
+if [[ -z "$HXT_PRE" ]] && [[ -f "$INGEST_ENV_HOST_PRE" ]]; then
+  HXT_PRE=$(grep -E '^HOSTEX_ACCESS_TOKEN=' "$INGEST_ENV_HOST_PRE" 2>/dev/null \
+            | head -1 | sed -E 's/^[^=]*=//; s/^"//; s/"$//')
+fi
+if [[ -z "$HXT_PRE" ]]; then
+  echo "FAIL: HOSTEX_ACCESS_TOKEN not available." >&2
+  echo "      Required for the daniel-direct-chat hxctx path (v12.2.1 / patch #34)." >&2
+  echo "      Pass HOSTEX_ACCESS_TOKEN=<token> bash $0 ..." >&2
+  echo "      OR ensure $INGEST_ENV_HOST_PRE contains HOSTEX_ACCESS_TOKEN=<token>." >&2
+  exit 1
+fi
+unset HXT_PRE INGEST_ENV_HOST_PRE
+
 echo "   - PyYAML in container Python"
 if ! "${EXEC[@]}" bash -lc 'python3 -c "import yaml" 2>/dev/null'; then
-  echo "     PyYAML missing; installing via pip…"
-  "${EXEC[@]}" bash -lc 'pip install --user --quiet pyyaml' || {
+  echo "     PyYAML missing; installing via apt…"
+  "${EXEC_ROOT[@]}" bash -c 'apt-get update -qq && apt-get install -y -qq python3-yaml' >/dev/null 2>&1 || {
+    # Last-resort pip fallbacks (rare — most installs land via apt above)
+    "${EXEC[@]}" bash -lc 'pip install --user --quiet pyyaml 2>/dev/null' || \
     "${EXEC_ROOT[@]}" bash -lc 'pip install --quiet pyyaml --break-system-packages 2>/dev/null || pip install --quiet pyyaml' || {
       echo "FAIL: could not install PyYAML in the container." >&2
-      echo "      Run: docker compose exec ${SERVICE} pip install pyyaml" >&2
+      echo "      Run: docker compose exec ${SERVICE} apt-get install -y python3-yaml" >&2
       exit 1
     }
   }
@@ -240,20 +285,6 @@ chown_inside_container "${COURIER_DIR_IN_CONTAINER}/query-edit.py"
 chown_inside_container "${COURIER_DIR_IN_CONTAINER}/tick-loop.sh"
 
 # ============================================================================
-# 2b. Drop the hostex-context skill (live Hostex reads at classify/draft time)
-# ============================================================================
-echo ">>> Installing hostex-context into ${SUBPROCESS_HOME}/hostex-context…"
-HOST_HOSTEX_CTX_DIR="${SCAFFOLD_DIR%/}/data/home/hostex-context"
-HOSTEX_CTX_DIR_IN_CONTAINER="${SUBPROCESS_HOME}/hostex-context"
-mkdir -p "$HOST_HOSTEX_CTX_DIR"
-cp -R "${REPO_DIR}/ref/hermes-skills/hostex-context/." "${HOST_HOSTEX_CTX_DIR}/"
-chmod 0755 "${HOST_HOSTEX_CTX_DIR}/hxctx"
-# The boss agent reads + execs these inside the container as the sidecar uid.
-for f in hxctx _client.py _classify.py SKILL.md; do
-  chown_inside_container "${HOSTEX_CTX_DIR_IN_CONTAINER}/${f}"
-done
-
-# ============================================================================
 # 3. Install boss skill at the legacy str-manager-approval path
 # ============================================================================
 echo ">>> Installing boss skill into owner profile '${OWNER_PROFILE}'…"
@@ -289,15 +320,120 @@ upsert_env() {
   fi
   printf '%s=%s\n' "$key" "$val" >> "$file"
 }
-upsert_env "$OWNER_ENV_HOST" PLOW_CHAT_BASE_URL https://chat.plow.co
+# Plow Chat backend URL — api.plow.co since the 2026-05 folded-back API
+# migration (chat.plow.co was retired). seed-hermes-plow-chat a14587b
+# defaults to this, but we set it explicitly so the value is always
+# pinned regardless of which plow-chat-platform version is installed.
+upsert_env "$OWNER_ENV_HOST" PLOW_CHAT_BASE_URL https://api.plow.co
 upsert_env "$OWNER_ENV_HOST" TEAM_CHAT_SECRETS_FILE /opt/data/home/.airbnb-coordinator/team-secrets.json
-upsert_env "$OWNER_ENV_HOST" AIRBNB_OWNER_MIRROR_SESSION_KEY ""
+# Auto-derive AIRBNB_OWNER_MIRROR_SESSION_KEY from the owner profile's
+# already-configured plow_chat (PLOW_CHAT_CHAT_UID). If the owner profile
+# hasn't yet been wired to a plow_chat (create_plow_chat_curl.sh hasn't
+# run on this profile), leave blank and warn — install can still complete;
+# the courier wake will fail loudly until it's filled.
+OWNER_PC_UID=$(grep '^PLOW_CHAT_CHAT_UID=' "$OWNER_ENV_HOST" 2>/dev/null | cut -d= -f2)
+if [[ -n "$OWNER_PC_UID" ]]; then
+  DERIVED_KEY="agent:main:plow_chat:dm:${OWNER_PC_UID}"
+  # Replace any existing value (empty placeholder or stale) with the derived one
+  grep -v ^AIRBNB_OWNER_MIRROR_SESSION_KEY= "$OWNER_ENV_HOST" > "$OWNER_ENV_HOST.tmp" 2>/dev/null || true
+  mv -f "$OWNER_ENV_HOST.tmp" "$OWNER_ENV_HOST" 2>/dev/null || true
+  echo "AIRBNB_OWNER_MIRROR_SESSION_KEY=${DERIVED_KEY}" >> "$OWNER_ENV_HOST"
+  echo "   - auto-derived AIRBNB_OWNER_MIRROR_SESSION_KEY=${DERIVED_KEY}"
+else
+  upsert_env "$OWNER_ENV_HOST" AIRBNB_OWNER_MIRROR_SESSION_KEY ""
+  echo "   ⚠  owner profile has no PLOW_CHAT_CHAT_UID yet — AIRBNB_OWNER_MIRROR_SESSION_KEY left blank."
+  echo "   ⚠  After running seed-hermes-plow-chat's create_plow_chat_curl.sh against the OWNER profile,"
+  echo "   ⚠  re-run this installer (idempotent) to auto-derive the session key."
+fi
 upsert_env "$OWNER_ENV_HOST" AIRBNB_COURIER_SLA_MINUTES 30
 upsert_env "$OWNER_ENV_HOST" AIRBNB_COURIER_ESCALATION_MINUTES 60
 upsert_env "$OWNER_ENV_HOST" BRAIN_DIR /opt/data/home/brain
+
+# Patch 34: HOSTEX env passthrough for daniel-direct-chat path (v12.2.1+).
+# Without these, the CEO-chats-the-agent-via-plow_chat path defaults
+# `hxctx` to api.hostex.io with no auth -> empty `[]` silently (no error).
+# The webhook path works without this (creds come from the subscription
+# prompt) but owner-direct queries return "0 bookings" for everything.
+# See REPRODUCIBILITY-PATCHES.md #34 and boss SKILL.md v12.2.1 step 6.6.
+upsert_env "$OWNER_ENV_HOST" HOSTEX_BASE_URL "${HOSTEX_BASE_URL_FOR_BOSS:-https://api.hostex.io}"
+
+# HOSTEX_ACCESS_TOKEN must be present. Resolution order:
+#   1. HOSTEX_ACCESS_TOKEN env var passed to this installer
+#   2. ${SCAFFOLD_DIR}/data/.hostex-ingest.env (the ingest sidecar's env_file
+#      — the common case if seed-hostex-history-ingest was installed first)
+# Fail loudly if neither has it — silent "0 bookings" is worse than no install.
+INGEST_ENV_HOST="${SCAFFOLD_DIR%/}/data/.hostex-ingest.env"
+HXT="${HOSTEX_ACCESS_TOKEN:-}"
+if [[ -z "$HXT" ]] && [[ -f "$INGEST_ENV_HOST" ]]; then
+  HXT=$(grep -E '^HOSTEX_ACCESS_TOKEN=' "$INGEST_ENV_HOST" 2>/dev/null         | head -1 | sed -E 's/^[^=]*=//; s/^"//; s/"$//')
+fi
+if [[ -z "$HXT" ]]; then
+  echo "FAIL: HOSTEX_ACCESS_TOKEN not found." >&2
+  echo "      Required for the daniel-direct-chat hxctx path (non-webhook context)." >&2
+  echo "      Without it, owner-direct queries to api.hostex.io return empty []" >&2
+  echo "      silently — CEO asks 'when is next booking?' and gets '0 bookings'" >&2
+  echo "      against a real Hostex account that has live reservations." >&2
+  echo "" >&2
+  echo "      Provide via either:" >&2
+  echo "        - HOSTEX_ACCESS_TOKEN=<token> bash $0 ..." >&2
+  echo "        - OR create $INGEST_ENV_HOST with HOSTEX_ACCESS_TOKEN=<token>" >&2
+  echo "          (this is what seed-hostex-history-ingest does at install time)" >&2
+  echo "" >&2
+  echo "      Webhook-context calls still work without this — token comes from" >&2
+  echo "      the webhook subscription prompt — but owner-direct chat will not." >&2
+  exit 1
+fi
+# Idempotent: only append if missing. Token value never echoed to logs.
+if ! grep -q '^HOSTEX_ACCESS_TOKEN=' "$OWNER_ENV_HOST" 2>/dev/null; then
+  printf 'HOSTEX_ACCESS_TOKEN=%s\n' "$HXT" >> "$OWNER_ENV_HOST"
+fi
+unset HXT
+echo "   - HOSTEX_BASE_URL + HOSTEX_ACCESS_TOKEN wired into owner profile .env (token value masked)"
+
 chmod 600 "$OWNER_ENV_HOST"
 chown_inside_container "/opt/data/profiles/${OWNER_PROFILE}/.env"
-echo "   - owner .env wired. NOTE: set AIRBNB_OWNER_MIRROR_SESSION_KEY before first wake (see end-of-install message)."
+
+# Patch 14: write per-profile platforms.plow_chat.enabled + plugins.enabled
+# block to owner profile config.yaml. Without these blocks, the daniel-gateway
+# sidecar's `hermes -p daniel gateway run` doesn't bind plow_chat at all and
+# the boss can't mirror to the owner channel.
+OWNER_CFG_HOST="${OWNER_PROFILE_DIR_HOST}/config.yaml"
+if [[ -f "$OWNER_CFG_HOST" ]] && ! grep -q '^platforms:' "$OWNER_CFG_HOST"; then
+  cat >> "$OWNER_CFG_HOST" <<'EOF'
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      host: "0.0.0.0"
+      port: 8787
+      secret: "INSECURE_NO_AUTH"
+  plow_chat:
+    enabled: true
+plugins:
+  enabled:
+    - plow-chat-platform
+EOF
+  echo "   - added platforms{webhook,plow_chat} + plugins block to owner config.yaml"
+  chown_inside_container "/opt/data/profiles/${OWNER_PROFILE}/config.yaml"
+fi
+
+# Patch 19: register the Hostex webhook subscription on the owner profile.
+# The subscription routes inbound POSTs to /webhooks/hostex-events into the
+# str-manager-approval skill. Without this, the boss never runs.
+echo ">>> Registering Hostex webhook subscription on owner profile…"
+if ! grep -q 'hostex-events' "${OWNER_PROFILE_DIR_HOST}/webhook_subscriptions.json" 2>/dev/null; then
+  HOSTEX_BASE_URL_DEFAULT="${HOSTEX_BASE_URL_FOR_BOSS:-http://host.docker.internal:8080}"
+  HOSTEX_TOKEN_DEFAULT="${HOSTEX_ACCESS_TOKEN_FOR_BOSS:-DTU_NO_AUTH}"
+  OWNER_PC_UID_FOR_PROMPT="${OWNER_PC_UID:-PLACEHOLDER_OWNER_CHAT_UID}"
+  "${EXEC[@]}" bash -lc "hermes -p ${OWNER_PROFILE} webhook subscribe hostex-events \
+    --skills str-manager-approval \
+    --deliver log \
+    --secret INSECURE_NO_AUTH \
+    --prompt 'INCOMING_HOSTEX_PAYLOAD={__raw__}\n\nThe payload above is the real Hostex message_created callback. Extract event, conversation_id, message_id from it and follow Trigger 1 of the str-manager-approval skill. Owner channel: platform=plow_chat chat_id=${OWNER_PC_UID_FOR_PROMPT}. Hostex API base: hostex_base_url=${HOSTEX_BASE_URL_DEFAULT} hostex_access_token=${HOSTEX_TOKEN_DEFAULT}.'" 2>&1 | tail -3
+  echo "   - subscription 'hostex-events' registered on '${OWNER_PROFILE}'"
+else
+  echo "   - subscription 'hostex-events' already present on '${OWNER_PROFILE}'"
+fi
 
 # ============================================================================
 # 4. Create team profile, install listener skill, ENFORCE PLATFORM BOUNDARY
@@ -355,6 +491,21 @@ PY
     echo "   - synced model block into $TEAM_CFG_HOST"
   fi
 
+  # Patch 14 (team side): add platforms.plow_chat.enabled + plugins block
+  # so the hermes-daniel-team gateway sidecar binds the WSS subscription.
+  if ! grep -q '^platforms:' "$TEAM_CFG_HOST" 2>/dev/null; then
+    cat >> "$TEAM_CFG_HOST" <<'EOF'
+platforms:
+  plow_chat:
+    enabled: true
+plugins:
+  enabled:
+    - plow-chat-platform
+EOF
+    echo "   - added platforms.plow_chat + plugins block to team config.yaml"
+    chown_inside_container "/opt/data/profiles/${TEAM_PROFILE}/config.yaml"
+  fi
+
   echo ">>> Installing listener skill into team profile '${TEAM_PROFILE}'…"
   TEAM_SKILL_DIR_HOST="${TEAM_PROFILE_DIR_HOST}/skills/airbnb-team-listener"
   mkdir -p "$TEAM_SKILL_DIR_HOST"
@@ -404,7 +555,7 @@ AIRBNB_COURIER_TICK_SECONDS=60
 AIRBNB_COURIER_SLA_MINUTES=30
 AIRBNB_COURIER_ESCALATION_MINUTES=60
 AIRBNB_COURIER_PARTIAL_STALENESS_SECONDS=300
-PLOW_CHAT_BASE_URL=https://chat.plow.co
+PLOW_CHAT_BASE_URL=https://api.plow.co
 TEAM_CHAT_SECRETS_FILE=/opt/data/home/.airbnb-coordinator/team-secrets.json
 BRAIN_DIR=/opt/data/home/brain
 EOF
@@ -423,6 +574,50 @@ chown_inside_container "/opt/data/home/.airbnb-coordinator/team-secrets.json"
 chown_inside_container "/opt/data/home/.airbnb-coordinator"
 
 # ============================================================================
+# 5b. Defensive cleanup: remove gbrain-sync sidecar from compose.gbrain.yaml
+# if present. Background: seed-hermes-gbrain v0.1.x installer wrote a
+# `gbrain-sync` service block to compose.gbrain.yaml that ran
+# `gbrain sync --watch` in a loop, maintaining a flat-file mirror under
+# /opt/data/home/brain/ for the v12.0 boss to read via search_files.
+# v12.4.0+ boss is gbrain-exclusive (Postgres-backed via gbrain CLI) and
+# explicitly prohibits filesystem reads. The sidecar is dead weight.
+# The gbrain seed installer's own fix (cross-repo) ships in seed-hermes-gbrain
+# v0.2.x+; this defensive cleanup catches operators on older gbrain seed
+# installs so their fresh airbnb-coordinator install still ends up clean.
+GBRAIN_COMPOSE="${SCAFFOLD_DIR%/}/compose.gbrain.yaml"
+if [[ -f "$GBRAIN_COMPOSE" ]] && grep -q '^[[:space:]]*gbrain-sync:' "$GBRAIN_COMPOSE"; then
+  echo
+  echo ">>> Removing legacy gbrain-sync sidecar from compose.gbrain.yaml…"
+  cp "$GBRAIN_COMPOSE" "$GBRAIN_COMPOSE.pre-sidecar-removal.bak.$(date +%s)"
+  python3 - "$GBRAIN_COMPOSE" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+src = p.read_text()
+marker = "\n  gbrain-sync:"
+if marker in src:
+    p.write_text(src[:src.index(marker)].rstrip() + "\n")
+    print("   - removed gbrain-sync service block (hermes entrypoint override preserved)")
+else:
+    print("   - no gbrain-sync block found (already clean)")
+PY
+  # Also stop + remove any already-running sidecar container.
+  SIDECAR_NAME="${COMPOSE_PROJECT_NAME:-}"
+  if [[ -z "$SIDECAR_NAME" ]]; then
+    SIDECAR_NAME=$(basename "${SCAFFOLD_DIR%/}")
+  fi
+  if docker ps --format '{{.Names}}' | grep -q "\-gbrain-sync$"; then
+    echo "   - stopping + removing live gbrain-sync container…"
+    (cd "${SCAFFOLD_DIR%/}" && docker compose stop gbrain-sync 2>&1 | tail -1) || true
+    (cd "${SCAFFOLD_DIR%/}" && docker compose rm -f gbrain-sync 2>&1 | tail -1) || true
+  fi
+  # Also remove the vestigial flat-file mirror under /opt/data/home/brain/facts/
+  # — only the boss read from this, and v12.4.0+ prohibits the read.
+  if "${EXEC[@]}" test -d /opt/data/home/brain/facts; then
+    echo "   - removing vestigial /opt/data/home/brain/facts/ (gbrain Postgres is now source of truth)…"
+    "${EXEC[@]}" bash -c 'rm -rf /opt/data/home/brain/facts/' || true
+  fi
+fi
+
 # 6. Update scaffold .env COMPOSE_FILE
 # ============================================================================
 echo ">>> Updating ${ENV_FILE} COMPOSE_FILE…"
