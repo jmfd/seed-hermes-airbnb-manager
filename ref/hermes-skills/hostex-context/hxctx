@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""hxctx — hostex-context tools the boss calls at classification + drafting time.
+
+Read-only live lookups against Hostex (single source of truth). Every subcommand
+prints one JSON object to stdout for the agent to consume. Errors print
+{"error": "..."} to stdout and exit non-zero.
+
+Subcommands:
+  calendar     --property P --start D1 --end D2
+  reservations --property P [--on D] [--from D1 --to D2] [--status S]
+  guest-state  (--conversation C | --reservation CODE) [--property P] [--asof D]
+  occupancy    --property P --date D
+  schedule     --property P [--day today|tomorrow|week] [--asof D]
+
+Config: HOSTEX_BASE_URL + HOSTEX_ACCESS_TOKEN (env) or --base-url/--token flags.
+'Today' resolves from --asof, else $HXCTX_TODAY, else system UTC date.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import date, datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _client import HostexClient, HostexError  # noqa: E402
+import _classify as C  # noqa: E402
+
+
+def _today(args) -> str:
+    return getattr(args, "asof", None) or os.environ.get("HXCTX_TODAY") or \
+        datetime.now(timezone.utc).date().isoformat()
+
+
+def _client(args) -> HostexClient:
+    return HostexClient(base_url=getattr(args, "base_url", None), token=getattr(args, "token", None))
+
+
+def _emit(obj) -> None:
+    print(json.dumps(obj, indent=2))
+
+
+def _date_list(start: str, end: str) -> list[str]:
+    d0, d1 = date.fromisoformat(start), date.fromisoformat(end)
+    out, d = [], d0
+    while d <= d1:
+        out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def _avail_map(client: HostexClient, property_token: str, start: str, end: str) -> dict:
+    """date -> {available, remarks} for one property over [start, end]."""
+    pid = client.resolve_property_id(property_token)
+    props = client.availabilities(pid, start, end)
+    out: dict[str, dict] = {}
+    for p in props:
+        for a in p.get("availabilities", []):
+            out[a["date"]] = {"available": bool(a.get("available")), "remarks": a.get("remarks", "")}
+    return out
+
+
+def _normalize_reservation(r: dict) -> dict:
+    return {
+        "reservation_code": r.get("reservation_code"),
+        "status": r.get("status"),
+        "stay_status": r.get("stay_status"),
+        "check_in_date": r.get("check_in_date"),
+        "check_out_date": r.get("check_out_date"),
+        "nights": _nights(r.get("check_in_date"), r.get("check_out_date")),
+        "guest_name": r.get("guest_name"),
+        "number_of_guests": r.get("number_of_guests"),
+        "property_id": r.get("property_id"),
+        "property_slug": r.get("property_slug"),
+        "channel_type": r.get("channel_type"),
+        "conversation_id": r.get("conversation_id"),
+        "lock_code": (r.get("check_in_details") or {}).get("lock_code"),
+    }
+
+
+def _nights(ci: str | None, co: str | None) -> int | None:
+    if not ci or not co:
+        return None
+    return (date.fromisoformat(co) - date.fromisoformat(ci)).days
+
+
+# -- subcommands -----------------------------------------------------------
+
+
+def cmd_calendar(args) -> int:
+    client = _client(args)
+    # Authoritative booked/free/blocked comes from /v3/availabilities (property
+    # level, integer property_id) — works identically on real Hostex and DTU.
+    avail = _avail_map(client, args.property, args.start, args.end)
+    # Price is best-effort enrichment via /v3/listings/calendar. Real Hostex
+    # listing_id is channel-specific (resolved from the property's channels[]);
+    # if it can't be resolved or the call fails, price degrades to null.
+    price_by_date = {}
+    listing_used = None
+    try:
+        listing = client.resolve_listing(args.property)
+        listing_used = {"listing_id": listing["listing_id"], "channel_type": listing["channel_type"]}
+        for L in client.listing_calendar([listing_used], args.start, args.end):
+            for c in L.get("calendar", []):
+                price_by_date[c["date"]] = {"price": c.get("price"), "restrictions": c.get("restrictions")}
+    except HostexError:
+        pass
+    days = []
+    for d in _date_list(args.start, args.end):
+        a = avail.get(d, {})
+        is_free = a.get("available", True)
+        remarks = a.get("remarks", "")
+        status = "free" if is_free else ("blocked" if remarks else "booked")
+        days.append({
+            "date": d,
+            "status": status,
+            "price": (price_by_date.get(d) or {}).get("price"),
+            "remarks": remarks,
+            "restrictions": (price_by_date.get(d) or {}).get("restrictions"),
+        })
+    booked = sum(1 for x in days if x["status"] == "booked")
+    blocked = sum(1 for x in days if x["status"] == "blocked")
+    _emit({"property": args.property, "start": args.start, "end": args.end,
+           "price_listing": listing_used,
+           "summary": {"booked": booked, "blocked": blocked, "free": len(days) - booked - blocked},
+           "days": days})
+    return 0
+
+
+def cmd_reservations(args) -> int:
+    client = _client(args)
+    filters = {"property_id": client.resolve_property_id(args.property) if args.property else None,
+               "status": args.status}
+    res = client.reservations(**filters)
+    if args.on:
+        res = [r for r in res if C._covers(r, args.on) or r.get("check_out_date") == args.on]
+    if args.start_date:
+        res = [r for r in res if (r.get("check_in_date") or "") >= args.start_date]
+    if args.end_date:
+        res = [r for r in res if (r.get("check_in_date") or "") <= args.end_date]
+    if args.upcoming:
+        today = _today(args)
+        res = [r for r in res if (r.get("check_in_date") or "") >= today]
+    res = sorted(res, key=lambda r: r.get("check_in_date") or "")
+    if args.limit:
+        res = res[:args.limit]
+    _emit({"property": args.property, "count": len(res),
+           "reservations": [_normalize_reservation(r) for r in res]})
+    return 0
+
+
+def cmd_guest_state(args) -> int:
+    client = _client(args)
+    today = _today(args)
+    chosen = None
+    matched: list[dict] = []
+    if args.reservation:
+        matched = client.reservations(reservation_code=args.reservation)
+    elif args.conversation:
+        pool = client.reservations(
+            property_id=client.resolve_property_id(args.property) if args.property else None)
+        matched = [r for r in pool if r.get("conversation_id") == args.conversation]
+    chosen = C.pick_relevant_reservation(matched, today)
+    state = C.classify_guest_state(chosen, today)
+    evidence = _normalize_reservation(chosen) if chosen else None
+    out = {
+        "state": state,
+        "asof": today,
+        "by": "reservation" if args.reservation else "conversation",
+        "ref": args.reservation or args.conversation,
+        "reservation": evidence,
+        "reservation_count": len(matched),
+    }
+    if chosen and state == C.CHECKED_IN_MIDSTAY:
+        out["nights_remaining"] = _nights(today, chosen.get("check_out_date"))
+    _emit(out)
+    return 0
+
+
+def cmd_occupancy(args) -> int:
+    client = _client(args)
+    d = date.fromisoformat(args.date)
+    start = (d - timedelta(days=1)).isoformat()
+    avail = _avail_map(client, args.property, start, args.date)
+    available_by_date = {k: v["available"] for k, v in avail.items()}
+    result = C.occupancy_adjacency(available_by_date, args.date)
+    result["property"] = args.property
+    # surface a maintenance remark on the night-before, if any
+    prev_remarks = (avail.get(result["prev_night_date"]) or {}).get("remarks", "")
+    if prev_remarks:
+        result["prev_night_remarks"] = prev_remarks
+    _emit(result)
+    return 0
+
+
+def cmd_schedule(args) -> int:
+    client = _client(args)
+    today = _today(args)
+    d0 = date.fromisoformat(today)
+    if args.day == "tomorrow":
+        lo = hi = (d0 + timedelta(days=1)).isoformat()
+    elif args.day == "week":
+        lo, hi = today, (d0 + timedelta(days=7)).isoformat()
+    else:  # today
+        lo = hi = today
+    res = client.reservations(
+        property_id=client.resolve_property_id(args.property) if args.property else None,
+        status="accepted")
+    arriving, in_house, departing = [], [], []
+    for r in res:
+        ci, co = r.get("check_in_date"), r.get("check_out_date")
+        if ci and lo <= ci <= hi:
+            arriving.append(_normalize_reservation(r))
+        if co and lo <= co <= hi:
+            departing.append(_normalize_reservation(r))
+        # in-house on the lo boundary day (covers it and not arriving/departing that day)
+        if ci and co and C._covers(r, lo) and ci != lo and co != lo:
+            in_house.append(_normalize_reservation(r))
+    _emit({"property": args.property, "window": {"day": args.day, "from": lo, "to": hi},
+           "arriving": arriving, "in_house": in_house, "departing": departing})
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="hxctx", description="hostex-context live lookups")
+    p.add_argument("--base-url", help="override HOSTEX_BASE_URL")
+    p.add_argument("--token", help="override HOSTEX_ACCESS_TOKEN")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    c = sub.add_parser("calendar")
+    c.add_argument("--property", required=True)
+    c.add_argument("--start", required=True)
+    c.add_argument("--end", required=True)
+    c.set_defaults(func=cmd_calendar)
+
+    r = sub.add_parser("reservations")
+    r.add_argument("--property")
+    r.add_argument("--on")
+    r.add_argument("--from", dest="start_date")
+    r.add_argument("--to", dest="end_date")
+    r.add_argument("--status")
+    r.add_argument("--upcoming", action="store_true", help="only check-ins on/after today")
+    r.add_argument("--limit", type=int, help="cap results after sort (e.g. next-3-bookings)")
+    r.add_argument("--asof")
+    r.set_defaults(func=cmd_reservations)
+
+    g = sub.add_parser("guest-state")
+    g.add_argument("--conversation")
+    g.add_argument("--reservation")
+    g.add_argument("--property")
+    g.add_argument("--asof")
+    g.set_defaults(func=cmd_guest_state)
+
+    o = sub.add_parser("occupancy")
+    o.add_argument("--property", required=True)
+    o.add_argument("--date", required=True)
+    o.set_defaults(func=cmd_occupancy)
+
+    s = sub.add_parser("schedule")
+    s.add_argument("--property")
+    s.add_argument("--day", choices=["today", "tomorrow", "week"], default="today")
+    s.add_argument("--asof")
+    s.set_defaults(func=cmd_schedule)
+    return p
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if args.cmd == "guest-state" and not (args.conversation or args.reservation):
+        _emit({"error": "guest-state requires --conversation or --reservation"})
+        return 2
+    try:
+        return args.func(args)
+    except HostexError as e:
+        _emit({"error": str(e)})
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -240,6 +240,20 @@ chown_inside_container "${COURIER_DIR_IN_CONTAINER}/query-edit.py"
 chown_inside_container "${COURIER_DIR_IN_CONTAINER}/tick-loop.sh"
 
 # ============================================================================
+# 2b. Drop the hostex-context skill (live Hostex reads at classify/draft time)
+# ============================================================================
+echo ">>> Installing hostex-context into ${SUBPROCESS_HOME}/hostex-context…"
+HOST_HOSTEX_CTX_DIR="${SCAFFOLD_DIR%/}/data/home/hostex-context"
+HOSTEX_CTX_DIR_IN_CONTAINER="${SUBPROCESS_HOME}/hostex-context"
+mkdir -p "$HOST_HOSTEX_CTX_DIR"
+cp -R "${REPO_DIR}/ref/hermes-skills/hostex-context/." "${HOST_HOSTEX_CTX_DIR}/"
+chmod 0755 "${HOST_HOSTEX_CTX_DIR}/hxctx"
+# The boss agent reads + execs these inside the container as the sidecar uid.
+for f in hxctx _client.py _classify.py SKILL.md; do
+  chown_inside_container "${HOSTEX_CTX_DIR_IN_CONTAINER}/${f}"
+done
+
+# ============================================================================
 # 3. Install boss skill at the legacy str-manager-approval path
 # ============================================================================
 echo ">>> Installing boss skill into owner profile '${OWNER_PROFILE}'…"

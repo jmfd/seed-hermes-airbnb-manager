@@ -150,6 +150,32 @@ else
 fi
 
 # ============================================================================
+# V3f — hostex-context installed + callable + boss wired to use it
+# ============================================================================
+note "V3f hostex-context installed"
+HOSTEX_CTX_DIR="/opt/data/home/hostex-context"
+if "${EXEC[@]}" test -x "$HOSTEX_CTX_DIR/hxctx"; then
+  pass "V3f hxctx present + executable"
+else
+  fail "V3f: hxctx missing or not executable at $HOSTEX_CTX_DIR/hxctx"
+fi
+if "${EXEC_LOGIN[@]}" "python3 $HOSTEX_CTX_DIR/tests/test_classify.py >/dev/null 2>&1"; then
+  pass "V3f hostex-context pure-logic tests pass"
+else
+  fail "V3f: hostex-context pure-logic tests failed"
+fi
+if "${EXEC_LOGIN[@]}" "python3 $HOSTEX_CTX_DIR/hxctx --help >/dev/null 2>&1"; then
+  pass "V3f hxctx CLI loads"
+else
+  fail "V3f: hxctx CLI failed to load"
+fi
+if "${EXEC[@]}" grep -q 'hostex-context' "$BOSS_SKILL"; then
+  pass "V3f boss skill wired to hostex-context"
+else
+  fail "V3f: boss skill does not reference hostex-context"
+fi
+
+# ============================================================================
 # V4 — listener skill installed (unless --skip-team-listener)
 # ============================================================================
 if [[ "$SKIP_TEAM_LISTENER" != "1" ]]; then

@@ -27,6 +27,36 @@ helper at `/opt/data/home/airbnb-courier/query-edit.py`. It owns flock + atomic
 write + git commit. Constructing YAML by hand is forbidden — it breaks the
 "preserve answer verbatim" contract and races with the courier sidecar.
 
+## Live occupancy & guest state (hostex-context)
+
+Static brain facts describe *policy*; the `hostex-context` skill tells you the
+*current answer*. Its read-only tools live at `/opt/data/home/hostex-context/hxctx`
+and pull live from Hostex (the single source of truth — no cache/mirror). Reach for
+them whenever a guest message or your draft depends on who is booked / checked in /
+arriving, or on check-in / check-out timing.
+
+Every `hxctx` call takes `--base-url "<hostex_base_url>" --token "<hostex_access_token>"`
+using the SAME webhook-prompt values you use for the Hostex GET/POST calls — these are
+never hardcoded and never read from a static file.
+
+- **At classification (Trigger 1 step 7):** run
+  `python3 /opt/data/home/hostex-context/hxctx --base-url "<hostex_base_url>" --token "<hostex_access_token>" guest-state --conversation <conversation_id>`.
+  The returned `state` (`curious_browser | inquiry_pending | future_guest |
+  arriving_today | checked_in_midstay | checking_out_today | past_guest |
+  cancelled`) anchors tone and the consult decision. A question the live data
+  already answers (e.g. early check-in when the night before is booked) may need
+  **no** team consult — draft directly.
+- **At drafting (step 8a, step 8b.5, and Trigger 3 step 4):** for any timing or
+  occupancy claim, call `hxctx occupancy --property <id> --date <D>` (early-checkin /
+  late-checkout feasibility), `hxctx calendar --property <id> --start <D1> --end <D2>`,
+  `hxctx reservations …`, or `hxctx schedule …`. Ground the reply in the live result;
+  never paste raw JSON to the guest. When live state and a static fact conflict, the
+  live state wins.
+
+These tools are READ-ONLY and never message the guest — delivery still flows through
+the owner-approval + Hostex POST path below. See the skill's own SKILL.md for how to
+fold results into a draft (including the same-day-booking caveat for early check-in).
+
 ## Env vars (set by the installer into the owner profile `.env`)
 
 - `PLOW_CHAT_BASE_URL` — Plow Chat REST base, default `https://chat.plow.co`
@@ -354,3 +384,6 @@ Procedure:
 - Webhook subscription prompt provides `platform`, `chat_id`,
   `hostex_base_url`, `hostex_access_token`. Env provides `PLOW_CHAT_BASE_URL`,
   `TEAM_CHAT_SECRETS_FILE`, `AIRBNB_OWNER_MIRROR_SESSION_KEY`. None hardcoded.
+- For timing / occupancy / guest-state questions, consult `hostex-context` live —
+  never guess a date is free. Live Hostex state overrides static brain facts on
+  conflict. The tools are read-only; they never message the guest.
