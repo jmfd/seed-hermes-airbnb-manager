@@ -241,14 +241,28 @@ step 7 classification.
 
    Then query with the cleaned text:
    ```bash
+   # Substrate defect #15: fail loud on plumbing errors. Do NOT swallow
+   # gbrain failures with `|| true` — that turns "gbrain not on PATH" or
+   # "Postgres unreachable" into a false MEMORY_MISS and the boss silently
+   # falls back to the no-consult path with a generic draft.
+   command -v gbrain >/dev/null 2>&1 || {
+     echo "GBRAIN_CLI_MISSING — per-profile gateway service lacks gbrain symlink." >&2
+     echo "Check compose.airbnb-coordinator.yaml — each service must symlink" >&2
+     echo "/opt/data/home/.bun/bin/gbrain → /usr/local/bin/gbrain at startup." >&2
+     exit 127
+   }
+   # HOME=/opt/data/home is REQUIRED — the Hermes terminal tool may reset
+   # HOME on subprocess shells, and gbrain reads its config from
+   # ~/.gbrain/config.json. Without the explicit prefix gbrain reports
+   # "No brain configured" even though the brain is wired correctly.
    CLEAN_QUERY="<your cleaned query>"
-   CANDIDATES=$(gbrain query "$CLEAN_QUERY" --limit 8 2>&1 | grep -E "^\[" || true)
+   CANDIDATES=$(HOME=/opt/data/home gbrain query "$CLEAN_QUERY" --limit 8 2>&1 | grep -E "^\[")
    ```
 
    If `CANDIDATES` is empty, fall back to a SHORTER keyword form (1-3
    topic keywords pulled from the cleaned query):
    ```bash
-   CANDIDATES=$(gbrain query "<keyword keyword>" --limit 8 2>&1 | grep -E "^\[" || true)
+   CANDIDATES=$(HOME=/opt/data/home gbrain query "<keyword keyword>" --limit 8 2>&1 | grep -E "^\[")
    ```
    e.g. cleaned `"what is the wifi password"` → keyword fallback
    `"wifi password"` or just `"wifi"`.
@@ -283,8 +297,9 @@ step 7 classification.
    audit only; never in guest-facing draft.
 
    ```bash
+   # HOME=/opt/data/home required — same reason as Step 1 above.
    for slug in $FACT_CANDIDATES; do
-     gbrain get "$slug" 2>&1
+     HOME=/opt/data/home gbrain get "$slug" 2>&1
    done
    ```
 
@@ -689,8 +704,16 @@ acknowledgement. The behavior split:
 10. Deliver via the `send_message` tool. This is MANDATORY — it triggers
     `gateway.mirror.mirror_to_session`, putting the draft in the owner's
     session for later approval context.
-    - platform: the `platform` value from the webhook subscription prompt template
-    - chat_id: the `chat_id` value from the prompt template
+    - **Substrate defect #16: prefer the BARE `plow_chat` target** (the
+      home-channel form) when `PLOW_CHAT_HOME_CHANNEL` env is set on the
+      profile. The `plow_chat:<chat_id>` direct-target form fails with
+      "Could not resolve '<chat_uid>' on plow_chat" in some Hermes builds
+      even when the chat_id is valid. The bare `plow_chat` form routes
+      to the home channel which is pre-bound. Only fall back to
+      `plow_chat:<chat_id>` if `send_message(action='list')` returns it
+      as a resolvable direct target.
+    - platform: `plow_chat` (bare — preferred), OR `plow_chat:<chat_id>`
+      only if bare form unavailable
     - content (multi-line, v12.1 clean attendant style):
       ```
       <guest first name> (<property title>): "<fetched-message-content>"

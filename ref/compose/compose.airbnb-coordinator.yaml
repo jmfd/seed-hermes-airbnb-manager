@@ -32,6 +32,7 @@ services:
     working_dir: /opt/data
     environment:
       HERMES_HOME: /opt/data
+      HOME: /opt/data/home
       HERMES_YOLO_MODE: "1"
     env_file:
       - ./data/.env
@@ -52,11 +53,12 @@ services:
       - bash
       - -c
       - |
+        # v0.2.x: per-profile gateway needs hermes + gbrain + bun on PATH.
         ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
-        # Ensure PyYAML for query-edit.py — apt is the only reliable path
-        # (the container has no pip on PATH).
-        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
-          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        ln -sf /opt/data/home/.bun/bin/gbrain /usr/local/bin/gbrain 2>/dev/null
+        ln -sf /opt/data/home/.bun/bin/bun /usr/local/bin/bun 2>/dev/null
+        export HOME=/opt/data/home
+        # NB: no apt-get at startup. PyYAML is wired by installer prereq.
         exec /opt/hermes/.venv/bin/hermes -p daniel gateway run
 
   hermes-daniel-team:
@@ -66,6 +68,7 @@ services:
     working_dir: /opt/data
     environment:
       HERMES_HOME: /opt/data
+      HOME: /opt/data/home
       HERMES_YOLO_MODE: "1"
     env_file:
       - ./data/.env
@@ -79,9 +82,12 @@ services:
       - bash
       - -c
       - |
+        # v0.2.x: per-profile gateway needs hermes + gbrain + bun on PATH.
         ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
-        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
-          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        ln -sf /opt/data/home/.bun/bin/gbrain /usr/local/bin/gbrain 2>/dev/null
+        ln -sf /opt/data/home/.bun/bin/bun /usr/local/bin/bun 2>/dev/null
+        export HOME=/opt/data/home
+        # NB: no apt-get at startup. PyYAML is wired by installer prereq.
         exec /opt/hermes/.venv/bin/hermes -p daniel-team gateway run
 
   airbnb-courier:
@@ -104,14 +110,18 @@ services:
       - hermes
       - hermes-daniel
     restart: unless-stopped
-    # PID 1 = bootstrap (PyYAML + hermes symlink) then exec tick loop.
+    # PID 1 = bootstrap then exec tick loop.
     command:
       - bash
       - -c
       - |
+        # v0.2.x: courier sidecar also needs hermes + gbrain on PATH for the
+        # wakeAgent / mirror REST paths.
         ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes 2>/dev/null
-        command -v python3 >/dev/null && python3 -c 'import yaml' 2>/dev/null || \
-          (apt-get update -qq && apt-get install -y -qq python3-yaml >/dev/null 2>&1) || true
+        ln -sf /opt/data/home/.bun/bin/gbrain /usr/local/bin/gbrain 2>/dev/null
+        ln -sf /opt/data/home/.bun/bin/bun /usr/local/bin/bun 2>/dev/null
+        export HOME=/opt/data/home
+        # NB: no apt-get at startup. PyYAML is wired by installer prereq.
         exec /opt/data/home/airbnb-courier/tick-loop.sh
     healthcheck:
       test: ["CMD", "pgrep", "-f", "tick-loop.sh"]

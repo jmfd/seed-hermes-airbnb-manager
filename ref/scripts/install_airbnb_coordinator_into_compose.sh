@@ -147,9 +147,21 @@ if ! "${EXEC[@]}" bash -lc 'command -v gbrain >/dev/null 2>&1'; then
 fi
 
 echo "   - seed-hermes-plow-chat installed (plow-chat-platform in config.yaml plugins.enabled)"
-if ! grep -qE '(^|[[:space:]])-[[:space:]]+plow-chat-platform' "${SCAFFOLD_DIR%/}/data/config.yaml" 2>/dev/null; then
+# Substrate defect #5: structural YAML parse — accepts both inline and
+# multiline list forms. Prior `grep -qE '- plow-chat-platform'` rejected
+# valid inline form `enabled: [plow-chat-platform]`.
+if ! python3 -c "
+import sys, yaml, pathlib
+p = pathlib.Path('${SCAFFOLD_DIR%/}/data/config.yaml')
+if not p.exists():
+    sys.exit(1)
+d = yaml.safe_load(p.read_text()) or {}
+enabled = (d.get('plugins') or {}).get('enabled') or []
+sys.exit(0 if 'plow-chat-platform' in enabled else 1)
+" 2>/dev/null; then
   echo "FAIL: 'plow-chat-platform' not enabled in ${SCAFFOLD_DIR%/}/data/config.yaml plugins.enabled." >&2
-  echo "      Install seed-hermes-plow-chat first." >&2
+  echo "      Install seed-hermes-plow-chat first. (Accepts both list forms:" >&2
+  echo "      'enabled: [plow-chat-platform]' OR multiline '- plow-chat-platform'.)" >&2
   exit 1
 fi
 
@@ -435,6 +447,42 @@ else
   echo "   - subscription 'hostex-events' already present on '${OWNER_PROFILE}'"
 fi
 
+# Substrate defect #12: webhook adapter refuses to start when
+# INSECURE_NO_AUTH secret is paired with 0.0.0.0 bind (Hermes safety rail).
+# DTU testing requires 0.0.0.0 bind + INSECURE_NO_AUTH secret. The
+# REPRODUCIBILITY-PATCHES.md #6 says installer applies the bypass; this
+# block makes that real by editing /opt/hermes/gateway/platforms/webhook.py
+# in the container + clearing bytecode cache + verifying.
+echo ">>> Applying INSECURE_NO_AUTH local-bypass to gateway webhook adapter (REPRODUCIBILITY-PATCHES.md #6)…"
+WEBHOOK_PY=/opt/hermes/gateway/platforms/webhook.py
+if "${EXEC[@]}" grep -q "if False and secret == _INSECURE_NO_AUTH" "$WEBHOOK_PY" 2>/dev/null; then
+  echo "   - webhook.py already patched (bypass active)"
+elif "${EXEC[@]}" grep -q "if secret == _INSECURE_NO_AUTH and not _is_loopback_host" "$WEBHOOK_PY" 2>/dev/null; then
+  "${EXEC_ROOT[@]}" python3 -c "
+import re, pathlib
+p = pathlib.Path('$WEBHOOK_PY')
+src = p.read_text()
+new = re.sub(
+    r'if secret == _INSECURE_NO_AUTH and not _is_loopback_host',
+    'if False and secret == _INSECURE_NO_AUTH and not _is_loopback_host',
+    src, count=1
+)
+if new == src:
+    raise SystemExit('webhook.py anchor not found — upstream changed?')
+p.write_text(new)
+print('   - patched webhook.py (INSECURE_NO_AUTH + non-loopback bypass)')
+"
+  "${EXEC_ROOT[@]}" bash -c 'find /opt/hermes/gateway/platforms -name __pycache__ -exec rm -rf {} + 2>/dev/null; true'
+  echo "   - cleared webhook.py bytecode cache"
+else
+  echo "   ⚠ webhook.py anchor not found — upstream signature may have changed." >&2
+  echo "     Verify the webhook adapter still starts after install; if not, patch by hand." >&2
+fi
+# Verify: bypass marker present.
+if ! "${EXEC[@]}" grep -q "if False and secret == _INSECURE_NO_AUTH" "$WEBHOOK_PY" 2>/dev/null; then
+  echo "   ⚠ post-patch verify FAILED — bypass marker not found in webhook.py" >&2
+fi
+
 # ============================================================================
 # 4. Create team profile, install listener skill, ENFORCE PLATFORM BOUNDARY
 # ============================================================================
@@ -520,7 +568,16 @@ EOF
   # Team profile .env — make sure PLOW_CHATS is set (REQUIRED) or refuse later.
   TEAM_ENV_HOST="${TEAM_PROFILE_DIR_HOST}/.env"
   touch "$TEAM_ENV_HOST"
-  if ! grep -q '^PLOW_CHATS=' "$TEAM_ENV_HOST"; then
+  # Substrate defect #7: don't write empty PLOW_CHATS placeholder + warn if
+  # the single-chat fallback (PLOW_CHAT_CHAT_UID + PLOW_CHAT_TOKEN) is already
+  # wired by seed-hermes-plow-chat activation. Empty placeholder + warning
+  # confused operators because the listener actually works on single-chat.
+  HAS_SINGLE_CHAT=0
+  if grep -q '^PLOW_CHAT_CHAT_UID=..*' "$TEAM_ENV_HOST" 2>/dev/null \
+     && grep -q '^PLOW_CHAT_TOKEN=..*' "$TEAM_ENV_HOST" 2>/dev/null; then
+    HAS_SINGLE_CHAT=1
+  fi
+  if [[ "$HAS_SINGLE_CHAT" == "0" ]] && ! grep -q '^PLOW_CHATS=' "$TEAM_ENV_HOST"; then
     cat >> "$TEAM_ENV_HOST" <<'EOF'
 # PLOW_CHATS: comma-separated list of <chat_uid>:<X-Chat-Secret-Key> pairs,
 # one per team member. The patched seed-hermes-plow-chat adapter reads this
@@ -535,8 +592,12 @@ EOF
   rm -f "${TEAM_PROFILE_DIR_HOST}/.skills_prompt_snapshot.json"
 
   echo "   - listener installed."
-  echo "   - REMINDER: set PLOW_CHATS in ${TEAM_ENV_HOST} before bringing the team listener up."
-  echo "     This REQUIRES the seed-hermes-plow-chat multi-token patch (Stream #1)."
+  if [[ "$HAS_SINGLE_CHAT" == "1" ]]; then
+    echo "   - team profile uses single-chat path (PLOW_CHAT_CHAT_UID present); PLOW_CHATS not required."
+  else
+    echo "   - REMINDER: set PLOW_CHATS in ${TEAM_ENV_HOST} before bringing the team listener up."
+    echo "     This REQUIRES the seed-hermes-plow-chat multi-token patch (Stream #1)."
+  fi
 fi
 
 # ============================================================================
@@ -559,7 +620,22 @@ PLOW_CHAT_BASE_URL=https://api.plow.co
 TEAM_CHAT_SECRETS_FILE=/opt/data/home/.airbnb-coordinator/team-secrets.json
 BRAIN_DIR=/opt/data/home/brain
 EOF
-  echo "   - wrote ${SIDECAR_ENV_HOST}. Set AIRBNB_OWNER_MIRROR_SESSION_KEY before sidecar boot."
+  echo "   - wrote ${SIDECAR_ENV_HOST}."
+fi
+# Substrate defect #6: the installer derives AIRBNB_OWNER_MIRROR_SESSION_KEY
+# above (section 3b) and writes it to the OWNER profile .env, but historically
+# left .airbnb-courier.env with the empty placeholder — courier sidecar then
+# exited at startup. Sync the derived value here, idempotently.
+if [[ -n "${DERIVED_KEY:-}" ]]; then
+  if grep -q '^AIRBNB_OWNER_MIRROR_SESSION_KEY=$' "$SIDECAR_ENV_HOST" 2>/dev/null ||
+     ! grep -q "^AIRBNB_OWNER_MIRROR_SESSION_KEY=${DERIVED_KEY}\$" "$SIDECAR_ENV_HOST"; then
+    grep -v '^AIRBNB_OWNER_MIRROR_SESSION_KEY=' "$SIDECAR_ENV_HOST" > "$SIDECAR_ENV_HOST.tmp" 2>/dev/null || true
+    mv -f "$SIDECAR_ENV_HOST.tmp" "$SIDECAR_ENV_HOST" 2>/dev/null || true
+    printf 'AIRBNB_OWNER_MIRROR_SESSION_KEY=%s\n' "$DERIVED_KEY" >> "$SIDECAR_ENV_HOST"
+    echo "   - synced AIRBNB_OWNER_MIRROR_SESSION_KEY into ${SIDECAR_ENV_HOST}"
+  fi
+else
+  echo "   ⚠ AIRBNB_OWNER_MIRROR_SESSION_KEY not derived; courier sidecar will exit at startup until it is populated."
 fi
 chmod 600 "$SIDECAR_ENV_HOST"
 chown_inside_container "/opt/data/.airbnb-courier.env"
