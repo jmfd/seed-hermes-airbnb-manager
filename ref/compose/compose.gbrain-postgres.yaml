@@ -8,7 +8,7 @@
 # Deployed automatically by `install_airbnb_coordinator_into_compose.sh`
 # alongside `compose.airbnb-coordinator.yaml`. Operators can edit the
 # password if they want — `gbrain init --url ...` (run separately in
-# INSTALL.md Phase 9) reads whatever you put here.
+# SEED.md §12) reads whatever you put here.
 #
 # Service name `gbrain-postgres` is the Compose-network DNS hostname.
 # Use it bare in the gbrain URL — do NOT prefix with $COMPOSE_PROJECT_NAME

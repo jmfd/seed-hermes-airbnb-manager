@@ -774,7 +774,7 @@ echo ">>> Writing compose.airbnb-coordinator.yaml override…"
 cp -f "${REPO_DIR}/ref/compose/compose.airbnb-coordinator.yaml" "${SCAFFOLD_DIR%/}/compose.airbnb-coordinator.yaml"
 
 # Substrate defect #16 (Linux engineer) / original defect #2: ship the
-# Postgres backend override too. INSTALL.md Phase 9 documents that this
+# Postgres backend override too. SEED.md §12 documents that this
 # file exists; the installer is the canonical writer. Operators can edit
 # credentials in-place if desired — `gbrain init --url ...` (Phase 9)
 # reads whatever's set here.
