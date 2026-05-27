@@ -54,10 +54,11 @@ Then this seed:
 ```bash
 git clone https://github.com/plow-pbc/seed-hermes-airbnb-manager
 cd seed-hermes-airbnb-manager
+export OWNER_PROFILE=owner          # any lowercase handle you like
+export TEAM_PROFILE=owner-team      # convention: <owner>-team
 ./ref/scripts/install_airbnb_coordinator_into_compose.sh \
-  --scaffold ../hermes-agent \
-  --owner-profile daniel \
-  --team-profile daniel-team
+  --scaffold ../hermes-agent
+# (or pass --owner-profile / --team-profile explicitly instead of exporting)
 ```
 
 That:
@@ -75,7 +76,7 @@ That:
   `TEAM_CHAT_SECRETS_FILE`, `AIRBNB_OWNER_MIRROR_SESSION_KEY` (blank — you fill
   it post-install), `AIRBNB_COURIER_SLA_MINUTES`, `AIRBNB_COURIER_ESCALATION_MINUTES`,
   `BRAIN_DIR`. Mode 600.
-- Creates the `daniel-team` Hermes profile if missing. **Enforces the
+- Creates the `$TEAM_PROFILE` Hermes profile if missing. **Enforces the
   team-platform boundary**: refuses to proceed if the team profile's
   `config.yaml` has `webhook` or `telegram` enabled. Sync-mirrors the
   global model block.
@@ -146,8 +147,8 @@ See `SEED.md` for the full RFC 2119 normative spec including frontmatter schemas
 
 | Env var | Required | Default | Used by |
 |---|---|---|---|
-| `OWNER_PROFILE` | yes | `daniel` | install script |
-| `TEAM_PROFILE` | yes | `daniel-team` | install script |
+| `OWNER_PROFILE` | yes | _no default_ — operator-chosen handle, prompted at install time if unset | install script + per-profile compose sidecar |
+| `TEAM_PROFILE` | yes | _no default_ — operator-chosen handle, prompted at install time if unset | install script + per-profile compose sidecar |
 | `HOSTEX_BASE_URL` | yes | (inherited from owner profile `.env`) | boss skill |
 | `HOSTEX_ACCESS_TOKEN` | yes | (inherited) | boss skill |
 | `PLOW_CHAT_BASE_URL` | yes | (inherited from team profile `.env`) | boss skill (REST), listener skill (WSS) |
@@ -170,7 +171,7 @@ remove their plow_chat binding, remove their `<uid>:<key>` pair from the
   `sla_minutes` per team page but v0.1.0 uses the global default for all roles.
 - No group chats — explicitly out of scope (CEO premise).
 - Single owner — schema reserves `approved_by` for future multi-owner; v0.1.0
-  is Daniel-only.
+  is owner-only (one approver per install).
 - No web UI for `queries/` — debug via `cat`/`grep` and the brain repo's git log.
 - Brain repo bloat — no archive job in v0.1.0. At expected volume (< 100
   queries/day) this is fine for the first 12 months.

@@ -17,8 +17,9 @@ set -euo pipefail
 
 SCAFFOLD_DIR="${HERMES_SCAFFOLD_DIR:-./hermes-agent}"
 SERVICE="${HERMES_COMPOSE_SERVICE:-hermes}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
-TEAM_PROFILE="${TEAM_PROFILE:-daniel-team}"
+# REQUIRED; resolved below from env or scaffold .env.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
+TEAM_PROFILE="${TEAM_PROFILE:-}"
 PURGE=0
 PURGE_QUERIES=0
 RESTORE_LEGACY=0
@@ -33,8 +34,9 @@ Gentle uninstall by default. Removes the courier sidecar + compose override
 Options:
   --scaffold PATH    seed-hermes scaffold dir. Default: ./hermes-agent
   --service NAME     Compose service. Default: hermes
-  --owner-profile N  Owner profile name. Default: daniel
-  --team-profile N   Team profile name. Default: daniel-team
+  --owner-profile N  Owner profile name. REQUIRED (no default — install-time
+                     value persisted to <scaffold>/.env as OWNER_PROFILE=).
+  --team-profile N   Team profile name. REQUIRED.
   --purge            DESTRUCTIVE: also delete the team Hermes profile.
   --purge-queries    DESTRUCTIVE: also delete brain/queries/q-*.md
                      (loses in-flight conversation state).
@@ -60,6 +62,26 @@ done
 
 [[ -d "$SCAFFOLD_DIR" ]] || { echo "Scaffold not found: $SCAFFOLD_DIR" >&2; exit 1; }
 ENV_FILE="${SCAFFOLD_DIR%/}/.env"
+
+# Resolve OWNER_PROFILE / TEAM_PROFILE from env or scaffold .env. Fail loud if
+# missing — operator must know which profile they installed against.
+resolve_from_env_file() {
+  local varname="$1" current="${!varname:-}"
+  if [[ -n "$current" ]]; then return; fi
+  if [[ -f "$ENV_FILE" ]]; then
+    current=$(awk -F= -v k="$varname" '$1==k{ sub(/^[^=]*=/,"",$0); print; exit }' "$ENV_FILE" \
+              | sed -E 's/^"//; s/"$//')
+  fi
+  if [[ -z "$current" ]]; then
+    echo "FAIL: \$$varname not set (env), and not found in ${ENV_FILE}." >&2
+    echo "      The installer writes OWNER_PROFILE / TEAM_PROFILE into the scaffold .env." >&2
+    echo "      Pass --owner-profile / --team-profile, or export the var." >&2
+    exit 2
+  fi
+  eval "$varname=\"\${current}\""
+}
+resolve_from_env_file OWNER_PROFILE
+resolve_from_env_file TEAM_PROFILE
 
 # 1. Stop + remove the airbnb-courier sidecar.
 echo ">>> Stopping airbnb-courier sidecar…"

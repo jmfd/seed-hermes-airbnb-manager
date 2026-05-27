@@ -236,7 +236,7 @@ step 7 classification.
 
    Examples:
    - `"Hi, what is the wifi password?"` → `"what is the wifi password"`
-   - `"Hey Daniel — quick question: can I check in early tomorrow?"` → `"can I check in early tomorrow"`
+   - `"Hey Alex — quick question: can I check in early tomorrow?"` → `"can I check in early tomorrow"`
    - `"Where's the oven manual, thanks!"` → `"where is the oven manual"`
 
    Then query with the cleaned text:
@@ -356,13 +356,13 @@ availability"); 6.6 catches them.
      no webhook payload in this turn, the message is a question like
      "when is the next booking?" or "is anyone staying tomorrow?"): use
      env defaults, do NOT pass flags. `HOSTEX_ACCESS_TOKEN` and
-     `HOSTEX_BASE_URL` are loaded from the daniel profile env and point
+     `HOSTEX_BASE_URL` are loaded from the owner profile env and point
      to **real api.hostex.io**. Invoke hxctx with no `--base-url` and no
      `--token`:
      ```
      /opt/data/home/hostex-context/hxctx reservations --upcoming --limit 5
      ```
-     **DO NOT** read `/opt/data/profiles/daniel/webhook_subscriptions.json`
+     **DO NOT** read `/opt/data/profiles/$OWNER_PROFILE/webhook_subscriptions.json`
      and reuse `hostex_base_url` / `hostex_access_token` from there in a
      non-webhook turn. Those are SCOPED to webhook delivery — they may
      point to a DTU stub for testing and will return empty results

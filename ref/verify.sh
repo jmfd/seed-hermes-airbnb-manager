@@ -15,8 +15,9 @@ set -euo pipefail
 
 SCAFFOLD_DIR="${HERMES_SCAFFOLD_DIR:-./hermes-agent}"
 SERVICE="${HERMES_COMPOSE_SERVICE:-hermes}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
-TEAM_PROFILE="${TEAM_PROFILE:-daniel-team}"
+# REQUIRED; resolved below from env or scaffold .env.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
+TEAM_PROFILE="${TEAM_PROFILE:-}"
 HERMES_UID_OVERRIDE="${HERMES_UID_OVERRIDE:-}"
 HERMES_GID_OVERRIDE="${HERMES_GID_OVERRIDE:-}"
 CHECK_PREREQS_ONLY=0
@@ -30,8 +31,10 @@ Usage: $0 [options]
 Options:
   --scaffold PATH            Default: ./hermes-agent
   --service NAME             Default: hermes
-  --owner-profile NAME       Default: daniel
-  --team-profile NAME        Default: daniel-team
+  --owner-profile NAME       REQUIRED (read from \$OWNER_PROFILE env or
+                             <scaffold>/.env if not passed). The installer
+                             writes OWNER_PROFILE= into <scaffold>/.env.
+  --team-profile NAME        REQUIRED (same resolution as --owner-profile).
   --check-prereqs-only       Only run V1 (prerequisite check); exit after.
   --skip-team-listener       Skip V4 (listener installed). Use when the
                              installer was run with --skip-team-listener.
@@ -57,6 +60,26 @@ done
 [[ -d "$SCAFFOLD_DIR" ]] || { echo "Scaffold not found: $SCAFFOLD_DIR" >&2; exit 2; }
 
 ENV_FILE="${SCAFFOLD_DIR%/}/.env"
+
+# Resolve OWNER_PROFILE / TEAM_PROFILE from env or scaffold .env. REQUIRED.
+resolve_from_env_file() {
+  local varname="$1" current="${!varname:-}"
+  if [[ -n "$current" ]]; then return; fi
+  if [[ -f "$ENV_FILE" ]]; then
+    current=$(awk -F= -v k="$varname" '$1==k{ sub(/^[^=]*=/,"",$0); print; exit }' "$ENV_FILE" \
+              | sed -E 's/^"//; s/"$//')
+  fi
+  if [[ -z "$current" ]]; then
+    echo "FAIL: \$$varname not set (env), and not found in ${ENV_FILE}." >&2
+    echo "      The installer writes OWNER_PROFILE / TEAM_PROFILE into the scaffold .env." >&2
+    echo "      Pass --owner-profile / --team-profile, or export the var." >&2
+    exit 2
+  fi
+  eval "$varname=\"\${current}\""
+}
+resolve_from_env_file OWNER_PROFILE
+resolve_from_env_file TEAM_PROFILE
+
 if [[ -z "$HERMES_UID_OVERRIDE" && -f "$ENV_FILE" ]]; then
   HERMES_UID_OVERRIDE="$(awk -F= '$1=="HERMES_UID"{print $2}' "$ENV_FILE")"
 fi

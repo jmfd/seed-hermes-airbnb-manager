@@ -62,7 +62,7 @@ at classification + drafting time** to read live calendar / reservation / guest 
 - `brain/facts/mtn-home/*.md` — the static knowledge base the boss drafts from (e.g. `check_in.md`, `access_code.md`,
   **`early_check_in.md`**). These come from `hostex-ingest/` (periodic Hostex → distill → facts).
 - **There is no literal boss `SKILL.md` today** — `SOUL.md` is the empty default persona; the boss is the Hermes
-  agent under profile `daniel`. So `hostex-context` *is* the skill that arms the draft-time agent.
+  agent under the owner profile (`$OWNER_PROFILE`). So `hostex-context` *is* the skill that arms the draft-time agent.
 
 ### 2.4 The canonical gap (real artifact)
 `brain/facts/mtn-home/early_check_in.md` currently says, verbatim:

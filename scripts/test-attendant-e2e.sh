@@ -21,7 +21,8 @@
 set -euo pipefail
 
 SCAFFOLD="${HERMES_SCAFFOLD_DIR:-/private/tmp/plow-seeds/hermes-agent}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
+# REQUIRED; resolved from env or <scaffold>/.env below.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
 STAGE_TIMEOUT="${STAGE_TIMEOUT:-240}"
 
 while [ $# -gt 0 ]; do

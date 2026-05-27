@@ -15,7 +15,7 @@
 # owns all read-modify-write through one flock surface.
 #
 # Reads its config from env (env_file in compose.airbnb-coordinator.yaml):
-#   AIRBNB_OWNER_PROFILE              required (e.g. "daniel")
+#   AIRBNB_OWNER_PROFILE              required (operator-chosen handle, e.g. "owner")
 #   AIRBNB_OWNER_MIRROR_SESSION_KEY   required
 #   AIRBNB_COURIER_TICK_SECONDS       default 60
 #   AIRBNB_COURIER_SLA_MINUTES        default 30

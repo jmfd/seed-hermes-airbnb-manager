@@ -6,7 +6,7 @@ version: 1.0.0
 
 # airbnb-team-listener
 
-This skill runs on the TEAM profile (default name `daniel-team`). The team
+This skill runs on the TEAM profile (operator-chosen handle, e.g. `owner-team`). The team
 profile MUST NOT have any client-facing platforms enabled — no Hostex webhook,
 no telegram owner channel. The installer rejects the install if those platforms
 are present in the team profile's `config.yaml`.

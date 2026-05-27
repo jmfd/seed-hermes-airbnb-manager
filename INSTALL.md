@@ -96,6 +96,19 @@ echo "Container hermes runs as: $HERMES_USER"
 
 Every later `docker compose exec ... hermes ...` in this document uses `-u "$HERMES_USER"`. Don't substitute `501:20`.
 
+### Pick the Hermes profile handles (OWNER_PROFILE / TEAM_PROFILE)
+
+This seed is **operator-neutral** — there is no canonical "Daniel" baked in. Pick any handle you want for the operator-facing profile, plus a matching team-listener handle. The convention is `<owner-handle>` + `<owner-handle>-team`, but any lowercase alphanumeric+dash name works.
+
+```bash
+# Pick whatever names suit your install. Examples: owner / owner-team,
+# marie / marie-team, primary / cleaning-crew, etc.
+export OWNER_PROFILE="owner"
+export TEAM_PROFILE="owner-team"
+```
+
+These exports are read by every later phase + by the airbnb-manager installer (which also persists them to `$SCAFFOLD/.env` so docker compose can substitute `${OWNER_PROFILE}` into the per-profile gateway sidecars). If you skip the exports, the installer will prompt for them interactively when it runs in Phase 7.
+
 ---
 
 ## Phase 2.5 — Authenticate Hermes against OpenAI Codex (REQUIRED, no fallback)
@@ -157,24 +170,26 @@ docker compose --project-directory "$SCAFFOLD" exec -T hermes hermes plugins lis
 
 ---
 
-## Phase 4 — Create + activate `daniel` and `daniel-team` profiles
+## Phase 4 — Create + activate the owner + team profiles
+
+This phase creates two Hermes profiles using the handles you chose in Phase 2 (`$OWNER_PROFILE` and `$TEAM_PROFILE`). If you skipped the exports, set them now before continuing — they're referenced literally in the commands below.
 
 ⚠ **Operator action usually required**: each profile binds to a real iMessage / SMS line via `plow_chat` device-code (similar to Phase 2.5's Codex flow).
 
 ```bash
-(cd "$SCAFFOLD" && docker compose exec -T hermes hermes profile create daniel)
-(cd "$SCAFFOLD" && docker compose exec -T hermes hermes profile create daniel-team)
+(cd "$SCAFFOLD" && docker compose exec -T hermes hermes profile create "$OWNER_PROFILE")
+(cd "$SCAFFOLD" && docker compose exec -T hermes hermes profile create "$TEAM_PROFILE")
 ```
 
-For each profile, run the plow-chat activation helper (look for `create_plow_chat_curl.sh` or equivalent in `$WORK_DIR/seed-hermes-plow-chat/ref/scripts/`). The helper prints a URL/code; operator completes the bind from the target iPhone (`daniel` = operator's phone; `daniel-team` = cleaner's phone).
+For each profile, run the plow-chat activation helper (look for `create_plow_chat_curl.sh` or equivalent in `$WORK_DIR/seed-hermes-plow-chat/ref/scripts/`). The helper prints a URL/code; operator completes the bind from the target iPhone (`$OWNER_PROFILE` = operator's phone; `$TEAM_PROFILE` = cleaner's phone).
 
 **Verify:**
 
 ```bash
-grep -c 'PLOW_CHAT_CHAT_UID=..*' "$SCAFFOLD/data/profiles/daniel/.env"        # expect 1
-grep -c 'PLOW_CHAT_TOKEN=..*'    "$SCAFFOLD/data/profiles/daniel/.env"        # expect 1
-grep -c 'PLOW_CHAT_CHAT_UID=..*' "$SCAFFOLD/data/profiles/daniel-team/.env"   # expect 1
-grep -c 'PLOW_CHAT_TOKEN=..*'    "$SCAFFOLD/data/profiles/daniel-team/.env"   # expect 1
+grep -c 'PLOW_CHAT_CHAT_UID=..*' "$SCAFFOLD/data/profiles/$OWNER_PROFILE/.env"   # expect 1
+grep -c 'PLOW_CHAT_TOKEN=..*'    "$SCAFFOLD/data/profiles/$OWNER_PROFILE/.env"   # expect 1
+grep -c 'PLOW_CHAT_CHAT_UID=..*' "$SCAFFOLD/data/profiles/$TEAM_PROFILE/.env"    # expect 1
+grep -c 'PLOW_CHAT_TOKEN=..*'    "$SCAFFOLD/data/profiles/$TEAM_PROFILE/.env"    # expect 1
 ```
 
 ---
@@ -201,17 +216,17 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_gbrain_into_compose.sh
 
 ---
 
-## Phase 6 — Register the Hostex webhook subscription on `daniel`
+## Phase 6 — Register the Hostex webhook subscription on the owner profile
 
 The webhook subscription tells Hermes "route Hostex `message_created` callbacks to the `str-manager-approval` skill". It must exist before Phase 8 installs the boss skill (the airbnb-manager installer's prereq checks for it).
 
-### Phase 6a — Enable the webhook platform on the `daniel` profile (REQUIRED before subscribe)
+### Phase 6a — Enable the webhook platform on the owner profile (REQUIRED before subscribe)
 
 `hermes webhook subscribe` will print `Webhook platform is not enabled` and refuse to write the subscription if `platforms.webhook.enabled` is absent from the profile's `config.yaml`. The plow-chat installer (Phase 3) does not write this block for the airbnb-manager's webhook needs. Add it explicitly:
 
 ```bash
-DANIEL_CFG="$SCAFFOLD/data/profiles/daniel/config.yaml"
-python3 - "$DANIEL_CFG" <<'PY'
+OWNER_CFG="$SCAFFOLD/data/profiles/$OWNER_PROFILE/config.yaml"
+python3 - "$OWNER_CFG" <<'PY'
 import sys, yaml, pathlib
 p = pathlib.Path(sys.argv[1])
 d = yaml.safe_load(p.read_text()) if p.exists() else {}
@@ -233,10 +248,10 @@ PY
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc "
-  hermes -p daniel webhook subscribe hostex-events \
+  hermes -p $OWNER_PROFILE webhook subscribe hostex-events \
     --skills str-manager-approval \
     --secret INSECURE_NO_AUTH \
-    --prompt 'INCOMING_HOSTEX_PAYLOAD={__raw__}\\n\\nExtract event, conversation_id, message_id and follow Trigger 1. Owner channel: platform=plow_chat chat_id=\$(grep PLOW_CHAT_CHAT_UID /opt/data/profiles/daniel/.env | cut -d= -f2). Hostex API: hostex_base_url=https://api.hostex.io hostex_access_token=\$HOSTEX_ACCESS_TOKEN.'
+    --prompt 'INCOMING_HOSTEX_PAYLOAD={__raw__}\\n\\nExtract event, conversation_id, message_id and follow Trigger 1. Owner channel: platform=plow_chat chat_id=\$(grep PLOW_CHAT_CHAT_UID /opt/data/profiles/$OWNER_PROFILE/.env | cut -d= -f2). Hostex API: hostex_base_url=https://api.hostex.io hostex_access_token=\$HOSTEX_ACCESS_TOKEN.'
 ")
 ```
 
@@ -244,15 +259,15 @@ PY
 
 ```bash
 jq -e '.["hostex-events"] // .subscriptions[]? | select(.name=="hostex-events")' \
-  "$SCAFFOLD/data/profiles/daniel/webhook_subscriptions.json" >/dev/null \
+  "$SCAFFOLD/data/profiles/$OWNER_PROFILE/webhook_subscriptions.json" >/dev/null \
   && echo "  ✓ hostex-events subscription present" \
   || { echo "  ✗ hostex-events subscription missing"; exit 1; }
 ```
 
 ### Caveats
 
-- **Port mismatch.** Running `hermes webhook subscribe` without a prior `platforms.webhook` block defaults to `port: 8644`. Phase 6a's explicit YAML write pins port `8787` to match `compose.airbnb-coordinator.yaml`'s host mapping (`127.0.0.1:8787 → 8787`). If you see `port: 8644` in `daniel/config.yaml` after Phase 6b, re-run Phase 6a (idempotent) — it overwrites to 8787.
-- **Hostex base URL + access token are baked into the subscription prompt literal.** The boss skill reads `hostex_base_url` and `hostex_access_token` from the webhook prompt template stored in `data/profiles/daniel/webhook_subscriptions.json`, NOT from runtime env. If you later change `HOSTEX_BASE_URL` (e.g. to swap DTU for real Hostex), you MUST re-run Phase 6b — re-registering with the same name updates the prompt. Editing `$HOSTEX_BASE_URL` in `.env` alone has no effect on the webhook path.
+- **Port mismatch.** Running `hermes webhook subscribe` without a prior `platforms.webhook` block defaults to `port: 8644`. Phase 6a's explicit YAML write pins port `8787` to match `compose.airbnb-coordinator.yaml`'s host mapping (`127.0.0.1:8787 → 8787`). If you see `port: 8644` in `$OWNER_PROFILE/config.yaml` after Phase 6b, re-run Phase 6a (idempotent) — it overwrites to 8787.
+- **Hostex base URL + access token are baked into the subscription prompt literal.** The boss skill reads `hostex_base_url` and `hostex_access_token` from the webhook prompt template stored in `data/profiles/$OWNER_PROFILE/webhook_subscriptions.json`, NOT from runtime env. If you later change `HOSTEX_BASE_URL` (e.g. to swap DTU for real Hostex), you MUST re-run Phase 6b — re-registering with the same name updates the prompt. Editing `$HOSTEX_BASE_URL` in `.env` alone has no effect on the webhook path.
 
 ---
 
@@ -314,8 +329,9 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" \
 
 This installer:
 
+- Reads `OWNER_PROFILE` + `TEAM_PROFILE` from the env you exported in Phase 2 (or prompts interactively if unset + stdin is a TTY) and persists them to `$SCAFFOLD/.env` so docker compose can substitute them into the per-profile gateway sidecars at compose-eval time.
 - Verifies all prereqs from Phases 2–7 (Codex OAuth, plow-chat plugin, gbrain CLI, brain git-init, owner profile + webhook subscription, `HOSTEX_ACCESS_TOKEN` resolvable). Fails loud if any is missing.
-- Auto-wires `HOSTEX_ACCESS_TOKEN` + `HOSTEX_BASE_URL=https://api.hostex.io` into the `daniel` profile `.env`.
+- Auto-wires `HOSTEX_ACCESS_TOKEN` + `HOSTEX_BASE_URL=https://api.hostex.io` into the owner profile `.env`.
 - Auto-derives `AIRBNB_OWNER_MIRROR_SESSION_KEY` and writes it to **both** the owner profile `.env` and the courier sidecar `.env`.
 - Auto-patches `/opt/hermes/gateway/platforms/webhook.py` to lift the `INSECURE_NO_AUTH + 0.0.0.0` safety rail (required for the local DTU testing path) and verifies the patch landed.
 - Installs the boss skill at `str-manager-approval` v12.4.1 (memory-first + attendant role + hostex-context Branch L + 3-tier early-checkin + gbrain-exclusive + auto-ack partial-to-guest).
@@ -354,7 +370,7 @@ fi
 
 # ⚠ LINUX OPERATORS — per-profile image caveat:
 # compose.airbnb-coordinator.yaml hardcodes `image: nousresearch/hermes-agent:latest`
-# for hermes-daniel + hermes-daniel-team + airbnb-courier. The
+# for hermes-owner + hermes-owner-team + airbnb-courier. The
 # airbnb-coordinator installer applies runtime patches (SDK fixes,
 # webhook.py INSECURE_NO_AUTH bypass, /usr/local/bin/gbrain symlinks)
 # IMPERATIVELY into the running base hermes container's filesystem —
@@ -371,7 +387,7 @@ fi
 # per-profile services).
 # Tracked as upstream defect #17; not yet fixed in this version.
 
-# Bring up the full stack (hermes-daniel + hermes-daniel-team + airbnb-courier + gbrain-postgres)
+# Bring up the full stack (hermes-owner + hermes-owner-team + airbnb-courier + gbrain-postgres)
 (cd "$SCAFFOLD" && docker compose up -d)
 
 # Wait for postgres healthy
@@ -460,9 +476,9 @@ dtu guest send --property mtn-home --from "AcceptanceTest" --content "Hi, what i
 dtu events | grep webhook_delivered | tail -1
 
 # Boss session should show `gbrain query` + `gbrain get` invocations
-(cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc '
-  ls -t /opt/data/profiles/daniel/sessions/2026*.jsonl | head -1 | xargs grep -c gbrain
-')   # expect: >= 2
+(cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc "
+  ls -t /opt/data/profiles/$OWNER_PROFILE/sessions/2026*.jsonl | head -1 | xargs grep -c gbrain
+")   # expect: >= 2
 
 # Pending entry written with memory_cite.gbrain_slug
 (cd "$SCAFFOLD" && docker compose exec -T hermes cat /opt/data/home/.airbnb-manager/pirate-joker-pending.json | jq '.[] | .memory_cite.gbrain_slug' | tail -1)
@@ -502,15 +518,15 @@ Two clean-install validation runs (a macOS DinD substrate + a Linux Pi operator)
 
 | Symptom | Root cause | Fixed in |
 |---|---|---|
-| Boss draft is generic (no `(from saved answer)`), `pirate-joker-pending.json` `memory_cite` is empty, `gbrain query` not present in session log | Per-profile gateway services (`hermes-daniel`, `hermes-daniel-team`, `airbnb-courier`) didn't have `gbrain` on PATH after container recreate. `compose.gbrain.yaml`'s entrypoint hook only applied to the base `hermes` service. | PR #8 — `compose.airbnb-coordinator.yaml` now symlinks `gbrain` + `bun` to `/usr/local/bin/` at each per-profile service startup, with `HOME=/opt/data/home` pinned. SKILL.md adds a `command -v gbrain` preflight that fails loud instead of swallowing the error. |
+| Boss draft is generic (no `(from saved answer)`), `pirate-joker-pending.json` `memory_cite` is empty, `gbrain query` not present in session log | Per-profile gateway services (`hermes-${OWNER_PROFILE}`, `hermes-${TEAM_PROFILE}`, `airbnb-courier`) didn't have `gbrain` on PATH after container recreate. `compose.gbrain.yaml`'s entrypoint hook only applied to the base `hermes` service. | PR #8 — `compose.airbnb-coordinator.yaml` now symlinks `gbrain` + `bun` to `/usr/local/bin/` at each per-profile service startup, with `HOME=/opt/data/home` pinned. SKILL.md adds a `command -v gbrain` preflight that fails loud instead of swallowing the error. |
 | Distiller backfill exits 0 with `processed=0`; no fact pages written | `hostex-distiller` profile defaulted to `openai-codex` but no Codex OAuth credential was stored. Hermes returned setup/auth text instead of JSON; distiller parsed "no JSON → no facts → done". Silent. | PR #6 — installer now has a Codex OAuth preflight check (`hermes auth list \| grep openai-codex`) that fails loud before any LLM-invoking step. Phase 2.5 of this install doc makes the same check explicit. |
-| `airbnb-courier` sidecar exits at startup with `AIRBNB_OWNER_MIRROR_SESSION_KEY required` | The installer derived the session key into `data/profiles/daniel/.env` but left `data/.airbnb-courier.env` with the empty placeholder. | PR #8 — installer now syncs the derived value into both `.env` files in the same transaction. |
-| `hermes-daniel` gateway exits with `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing to start` | The local-DTU testing path uses the `INSECURE_NO_AUTH` secret with a `0.0.0.0` bind; Hermes has a safety rail that refuses this combo. The installer was supposed to patch `webhook.py` to lift the rail (per `REPRODUCIBILITY-PATCHES.md` #6) but never actually did. | PR #8 — installer now patches `/opt/hermes/gateway/platforms/webhook.py`, clears the bytecode cache, and verifies the patch marker post-write. |
+| `airbnb-courier` sidecar exits at startup with `AIRBNB_OWNER_MIRROR_SESSION_KEY required` | The installer derived the session key into the owner profile's `.env` but left `data/.airbnb-courier.env` with the empty placeholder. | PR #8 — installer now syncs the derived value into both `.env` files in the same transaction. |
+| `hermes-${OWNER_PROFILE}` gateway exits with `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing to start` | The local-DTU testing path uses the `INSECURE_NO_AUTH` secret with a `0.0.0.0` bind; Hermes has a safety rail that refuses this combo. The installer was supposed to patch `webhook.py` to lift the rail (per `REPRODUCIBILITY-PATCHES.md` #6) but never actually did. | PR #8 — installer now patches `/opt/hermes/gateway/platforms/webhook.py`, clears the bytecode cache, and verifies the patch marker post-write. |
 | Boss skill rejects valid `enabled: [plow-chat-platform]` inline YAML form, demands multiline form | Prereq check used `grep -qE '- plow-chat-platform'`. | PR #8 — switched to `python3 -c 'yaml.safe_load(...)'` structural parse. Accepts both list forms. |
 | Installer fails `FAIL: hermes user HOME is '/', expected '/opt/data'` even on a freshly-prepared scaffold | Installer trusted `HERMES_UID/HERMES_GID` from scaffold `.env` (host UID, often `1001` / `501`); the container actually runs as UID `10000`. `docker exec -u 1001` then hit container files owned by `10000` with no permission. | This PR — installer now live-probes the running hermes container (`docker compose exec hermes id -u/id -g`) and uses the actual container UID; `.env` is a legacy fallback only. INSTALL.md likewise computes `HERMES_USER` once from the live container. |
 | `gbrain init --url ...` fails with `getaddrinfo ENOTFOUND` or `(?d)` for embedding dimensions | INSTALL.md's example URL used `${PROJECT_NAME}-gbrain-postgres` (non-resolving FQDN) and embedding model `openai-codex/text-embedding-3-small` (Hermes-Codex syntax, not gbrain's `openai:<model>` form). | This PR — URL now bare `gbrain-postgres` (Compose service DNS name); embedding model now `openai:text-embedding-3-small`. |
 | Phase 6 `hermes webhook subscribe` fails with `Webhook platform is not enabled` | `hermes profile create` produces an empty profile config — no `platforms.webhook.enabled: true` block. Subscribe refuses to write the subscription. | This PR — INSTALL.md has a new Phase 6a that explicitly writes the `platforms.webhook` + `platforms.plow_chat` blocks via YAML structural edit BEFORE running subscribe. |
-| Boss session crashes with `No inference provider configured. Run 'hermes model'` on every webhook | `hermes profile create` makes an empty profile config — no `model:` block. The base hermes container reads `data/config.yaml` and has one, but per-profile services read `data/profiles/<name>/config.yaml` first. | This PR — installer now mirrors the scaffold's model block into `daniel/config.yaml` if missing (same code path as the existing daniel-team mirror). |
+| Boss session crashes with `No inference provider configured. Run 'hermes model'` on every webhook | `hermes profile create` makes an empty profile config — no `model:` block. The base hermes container reads `data/config.yaml` and has one, but per-profile services read `data/profiles/<name>/config.yaml` first. | PR #10 — installer now mirrors the scaffold's model block into the owner-profile `config.yaml` if missing (same code path as the team-profile mirror). |
 
 If you hit a defect not on this list, capture: (a) which phase you were in, (b) the verbatim error, (c) what step exited non-zero. Open an issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
 

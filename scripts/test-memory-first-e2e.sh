@@ -32,7 +32,8 @@ set -euo pipefail
 
 SCAFFOLD="${HERMES_SCAFFOLD_DIR:-/tmp/plow-seeds/hermes-agent}"
 HERMES_CONTAINER="${HERMES_CONTAINER:-seed-hermes-2568931506-hermes}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
+# REQUIRED; resolved from env or <scaffold>/.env below.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
 PROPERTY_SLUG="${PROPERTY_SLUG:-mtn-home}"
 STUB_PORT="${STUB_PORT:-18080}"
 STAGE_TIMEOUT="${STAGE_TIMEOUT:-180}"
@@ -50,6 +51,20 @@ while [ $# -gt 0 ]; do
     *) echo "unknown flag: $1" >&2; exit 3 ;;
   esac
 done
+
+# Resolve OWNER_PROFILE from env or scaffold .env. REQUIRED.
+if [ -z "${OWNER_PROFILE:-}" ]; then
+  _env_file="${SCAFFOLD%/}/.env"
+  if [ -f "$_env_file" ]; then
+    OWNER_PROFILE=$(awk -F= '$1=="OWNER_PROFILE"{ sub(/^[^=]*=/,"",$0); print; exit }' "$_env_file" \
+                    | sed -E 's/^"//; s/"$//')
+  fi
+fi
+if [ -z "${OWNER_PROFILE:-}" ]; then
+  echo "FAIL: \$OWNER_PROFILE not set (env), and not found in ${SCAFFOLD%/}/.env." >&2
+  echo "      Run the installer first, or pass --owner-profile <name>." >&2
+  exit 3
+fi
 
 SCAFFOLD_ABS=$(cd "$SCAFFOLD" && pwd)
 PENDING="/opt/data/home/.airbnb-manager/pirate-joker-pending.json"

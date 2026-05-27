@@ -31,8 +31,12 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 SCAFFOLD_DIR="${HERMES_SCAFFOLD_DIR:-./hermes-agent}"
 SERVICE="${HERMES_COMPOSE_SERVICE:-hermes}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
-TEAM_PROFILE="${TEAM_PROFILE:-daniel-team}"
+# OWNER_PROFILE / TEAM_PROFILE: REQUIRED, no default. The seed is operator-
+# neutral — there is no canonical "Daniel" baked in. Resolution order (see
+# resolve_profile_var below): CLI flag → process env → scaffold .env →
+# interactive prompt (if TTY) → fail loud.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
+TEAM_PROFILE="${TEAM_PROFILE:-}"
 HERMES_UID_OVERRIDE="${HERMES_UID_OVERRIDE:-}"
 HERMES_GID_OVERRIDE="${HERMES_GID_OVERRIDE:-}"
 SKIP_TEAM_LISTENER=0
@@ -54,8 +58,14 @@ seed-hermes scaffold. Idempotent.
 Options:
   --scaffold PATH               seed-hermes scaffold dir. Default: ./hermes-agent
   --service NAME                Compose service name. Default: hermes
-  --owner-profile NAME          Owner/boss Hermes profile. Default: daniel
-  --team-profile NAME           Team-listener Hermes profile. Default: daniel-team
+  --owner-profile NAME          Owner/boss Hermes profile NAME (the handle
+                                you want this Hermes install to use for the
+                                operator-facing profile). REQUIRED — no
+                                default. Prompted interactively if unset
+                                and stdin is a TTY; else fails loud.
+  --team-profile NAME           Team-listener Hermes profile NAME. Same
+                                rules as --owner-profile. Suggested form:
+                                "<owner-profile>-team".
   --uid N                       Hermes UID. Default: read from .env (501)
   --gid N                       Hermes GID. Default: read from .env (20)
   --skip-team-listener          Boss + courier only; no team profile created
@@ -95,6 +105,110 @@ command -v docker >/dev/null 2>&1 || { echo "docker not found on host PATH" >&2;
 [[ -f "${SCAFFOLD_DIR%/}/compose.yaml" ]] || { echo "compose.yaml not found in $SCAFFOLD_DIR" >&2; exit 1; }
 
 ENV_FILE="${SCAFFOLD_DIR%/}/.env"
+
+# ============================================================================
+# Resolve OWNER_PROFILE / TEAM_PROFILE (REQUIRED, no default)
+# ============================================================================
+# The seed is operator-neutral. Order: CLI flag → process env → scaffold .env
+# → interactive prompt (TTY only) → fail loud. Whatever the operator picks is
+# persisted to scaffold .env so docker compose can substitute ${OWNER_PROFILE}
+# / ${TEAM_PROFILE} into compose.airbnb-coordinator.yaml at compose-eval time.
+
+read_env_var() {
+  # Print value of $1 from $2 (or empty if missing). Strips surrounding quotes.
+  local key="$1" file="$2"
+  [[ -f "$file" ]] || { echo ""; return; }
+  awk -F= -v k="$key" '$1==k{ sub(/^[^=]*=/,"",$0); print; exit }' "$file" \
+    | sed -E 's/^"//; s/"$//'
+}
+
+upsert_scaffold_env() {
+  # Idempotent KEY=VALUE upsert into ENV_FILE. Creates file if missing.
+  local key="$1" val="$2"
+  touch "$ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    python3 - "$ENV_FILE" "$key" "$val" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+k = sys.argv[2]; v = sys.argv[3]
+out = []
+for line in p.read_text().splitlines(True):
+    if line.startswith(f"{k}="):
+        out.append(f"{k}={v}\n")
+    else:
+        out.append(line)
+p.write_text("".join(out))
+PY
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+  fi
+}
+
+resolve_profile_var() {
+  # Resolve a profile name into the named bash variable. Order:
+  #   1. process env (already set when this fn is called → return)
+  #   2. scaffold .env (compose reads from here at runtime)
+  #   3. interactive prompt if stdin is a TTY
+  #   4. fail loud
+  local varname="$1" example="$2"
+  local current="${!varname:-}"
+  if [[ -n "$current" ]]; then
+    eval "$varname=\"\${current}\""
+    return
+  fi
+  local from_env
+  from_env=$(read_env_var "$varname" "$ENV_FILE")
+  if [[ -n "$from_env" ]]; then
+    eval "$varname=\"\${from_env}\""
+    return
+  fi
+  if [[ -t 0 && -t 1 ]]; then
+    echo "" >&2
+    echo "  This Hermes install needs a handle for the ${varname} profile." >&2
+    echo "  Pick any lowercase handle (letters, digits, dashes). e.g. ${example}" >&2
+    local entered
+    while :; do
+      read -r -p "    ${varname}: " entered
+      if [[ -z "$entered" ]]; then
+        echo "    (empty — please type a handle)" >&2
+        continue
+      fi
+      if [[ ! "$entered" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        echo "    (must be lowercase, start with a letter, only letters/digits/dashes)" >&2
+        continue
+      fi
+      break
+    done
+    eval "$varname=\"\${entered}\""
+    return
+  fi
+  local flag
+  case "$varname" in
+    OWNER_PROFILE) flag="--owner-profile" ;;
+    TEAM_PROFILE)  flag="--team-profile" ;;
+    *)             flag="--<flag>" ;;
+  esac
+  cat >&2 <<EOF
+FAIL: \$${varname} is required but unset, and stdin is not a TTY so we
+      cannot prompt interactively.
+
+      Provide it one of these ways:
+        - export ${varname}=${example} && bash $0 ...
+        - bash $0 ${flag} ${example} ...
+        - add a line '${varname}=${example}' to ${ENV_FILE}
+
+      The seed is operator-neutral; pick any handle you like for your install.
+EOF
+  exit 1
+}
+
+resolve_profile_var OWNER_PROFILE owner
+resolve_profile_var TEAM_PROFILE owner-team
+
+upsert_scaffold_env OWNER_PROFILE "$OWNER_PROFILE"
+upsert_scaffold_env TEAM_PROFILE  "$TEAM_PROFILE"
+echo ">>> Hermes profile handles: OWNER_PROFILE=${OWNER_PROFILE}  TEAM_PROFILE=${TEAM_PROFILE}"
+echo "    (persisted to ${ENV_FILE} so compose can substitute them)"
 
 # Substrate defect #9 / #15: detect the ACTUAL container user instead of
 # trusting HERMES_UID/HERMES_GID from .env or defaulting to macOS 501/20.
@@ -256,7 +370,7 @@ if [[ -z "$HXT_PRE" ]] && [[ -f "$INGEST_ENV_HOST_PRE" ]]; then
 fi
 if [[ -z "$HXT_PRE" ]]; then
   echo "FAIL: HOSTEX_ACCESS_TOKEN not available." >&2
-  echo "      Required for the daniel-direct-chat hxctx path (v12.2.1 / patch #34)." >&2
+  echo "      Required for the owner-direct-chat hxctx path (v12.2.1 / patch #34)." >&2
   echo "      Pass HOSTEX_ACCESS_TOKEN=<token> bash $0 ..." >&2
   echo "      OR ensure $INGEST_ENV_HOST_PRE contains HOSTEX_ACCESS_TOKEN=<token>." >&2
   exit 1
@@ -383,8 +497,8 @@ upsert_env "$OWNER_ENV_HOST" AIRBNB_COURIER_SLA_MINUTES 30
 upsert_env "$OWNER_ENV_HOST" AIRBNB_COURIER_ESCALATION_MINUTES 60
 upsert_env "$OWNER_ENV_HOST" BRAIN_DIR /opt/data/home/brain
 
-# Patch 34: HOSTEX env passthrough for daniel-direct-chat path (v12.2.1+).
-# Without these, the CEO-chats-the-agent-via-plow_chat path defaults
+# Patch 34: HOSTEX env passthrough for owner-direct-chat path (v12.2.1+).
+# Without these, the owner-chats-the-agent-via-plow_chat path defaults
 # `hxctx` to api.hostex.io with no auth -> empty `[]` silently (no error).
 # The webhook path works without this (creds come from the subscription
 # prompt) but owner-direct queries return "0 bookings" for everything.
@@ -403,9 +517,9 @@ if [[ -z "$HXT" ]] && [[ -f "$INGEST_ENV_HOST" ]]; then
 fi
 if [[ -z "$HXT" ]]; then
   echo "FAIL: HOSTEX_ACCESS_TOKEN not found." >&2
-  echo "      Required for the daniel-direct-chat hxctx path (non-webhook context)." >&2
+  echo "      Required for the owner-direct-chat hxctx path (non-webhook context)." >&2
   echo "      Without it, owner-direct queries to api.hostex.io return empty []" >&2
-  echo "      silently — CEO asks 'when is next booking?' and gets '0 bookings'" >&2
+  echo "      silently — owner asks 'when is next booking?' and gets '0 bookings'" >&2
   echo "      against a real Hostex account that has live reservations." >&2
   echo "" >&2
   echo "      Provide via either:" >&2
@@ -428,9 +542,9 @@ chmod 600 "$OWNER_ENV_HOST"
 chown_inside_container "/opt/data/profiles/${OWNER_PROFILE}/.env"
 
 # Patch 14: write per-profile platforms.plow_chat.enabled + plugins.enabled
-# block to owner profile config.yaml. Without these blocks, the daniel-gateway
-# sidecar's `hermes -p daniel gateway run` doesn't bind plow_chat at all and
-# the boss can't mirror to the owner channel.
+# block to owner profile config.yaml. Without these blocks, the owner-gateway
+# sidecar's `hermes -p ${OWNER_PROFILE} gateway run` doesn't bind plow_chat
+# at all and the boss can't mirror to the owner channel.
 OWNER_CFG_HOST="${OWNER_PROFILE_DIR_HOST}/config.yaml"
 if [[ -f "$OWNER_CFG_HOST" ]] && ! grep -q '^platforms:' "$OWNER_CFG_HOST"; then
   cat >> "$OWNER_CFG_HOST" <<'EOF'
@@ -452,7 +566,7 @@ EOF
 fi
 
 # Substrate defect #22: `hermes profile create` produces an empty
-# config.yaml — no model: block. Per-profile services (hermes-daniel)
+# config.yaml — no model: block. Per-profile services (hermes-owner)
 # load the PROFILE's config.yaml first, not the scaffold's, so without
 # a model block here the boss webhook session crashes with "No inference
 # provider configured. Run 'hermes model' to choose a provider and model".
@@ -593,7 +707,7 @@ PY
   fi
 
   # Patch 14 (team side): add platforms.plow_chat.enabled + plugins block
-  # so the hermes-daniel-team gateway sidecar binds the WSS subscription.
+  # so the hermes-owner-team gateway sidecar binds the WSS subscription.
   if ! grep -q '^platforms:' "$TEAM_CFG_HOST" 2>/dev/null; then
     cat >> "$TEAM_CFG_HOST" <<'EOF'
 platforms:

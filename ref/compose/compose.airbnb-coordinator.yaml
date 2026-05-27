@@ -2,14 +2,14 @@
 #
 # Adds THREE sidecar services to the seed-hermes scaffold:
 #
-#   1. hermes-daniel       — gateway for the OWNER profile (boss skill).
-#                            Binds the webhook adapter on host 127.0.0.1:8787 so
-#                            Hostex callbacks (or a local DTU) can POST inbound.
-#   2. hermes-daniel-team  — gateway for the TEAM-LISTENER profile (listener skill).
-#                            plow_chat WSS-only, no host port binding needed.
-#   3. airbnb-courier      — the courier tick loop that re-pings stale asks,
-#                            escalates at SLA, and wakes the owner gateway when
-#                            a query is ready to draft a reply.
+#   1. hermes-owner       — gateway for the OWNER profile (boss skill).
+#                           Binds the webhook adapter on host 127.0.0.1:8787 so
+#                           Hostex callbacks (or a local DTU) can POST inbound.
+#   2. hermes-owner-team  — gateway for the TEAM-LISTENER profile (listener skill).
+#                           plow_chat WSS-only, no host port binding needed.
+#   3. airbnb-courier     — the courier tick loop that re-pings stale asks,
+#                           escalates at SLA, and wakes the owner gateway when
+#                           a query is ready to draft a reply.
 #
 # Why per-profile gateway sidecars (not just `hermes -p <profile> gateway run`
 # inside the main `hermes` container)?
@@ -21,13 +21,25 @@
 #   restart:unless-stopped survive recreates by design — this is the
 #   reproducibility floor.
 #
+# Operator-neutral parameterization:
+#   The service KEYS below (hermes-owner / hermes-owner-team) are
+#   infrastructure identifiers chosen by the seed and have no semantic tie
+#   to any specific operator. The operator's chosen handle appears in:
+#     - container_name (visible in `docker ps`)
+#     - env_file path (./data/profiles/${OWNER_PROFILE}/.env)
+#     - the -p arg in the gateway command
+#   ${OWNER_PROFILE} and ${TEAM_PROFILE} are written to the scaffold's
+#   <scaffold>/.env file by install_airbnb_coordinator_into_compose.sh,
+#   which prompts for them at install time. docker compose reads .env from
+#   the project directory and substitutes them at compose-eval time.
+#
 # Loaded via COMPOSE_FILE=compose.yaml:[...]:compose.airbnb-coordinator.yaml
 # in <scaffold>/.env (the install script writes this).
 
 services:
-  hermes-daniel:
+  hermes-owner:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-daniel
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-${OWNER_PROFILE}
     user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
     working_dir: /opt/data
     environment:
@@ -36,12 +48,12 @@ services:
       HERMES_YOLO_MODE: "1"
     env_file:
       - ./data/.env
-      - ./data/profiles/daniel/.env
+      - ./data/profiles/${OWNER_PROFILE}/.env
     volumes:
       - ./data:/opt/data
     ports:
       # Webhook adapter — bound to host loopback only.
-      # The daniel profile owns the Hostex webhook subscription;
+      # The owner profile owns the Hostex webhook subscription;
       # this is the port DTU (and real Hostex via tunnel) POSTs to.
       - "127.0.0.1:${HERMES_WEBHOOK_PORT:-8787}:8787"
     depends_on:
@@ -59,11 +71,11 @@ services:
         ln -sf /opt/data/home/.bun/bin/bun /usr/local/bin/bun 2>/dev/null
         export HOME=/opt/data/home
         # NB: no apt-get at startup. PyYAML is wired by installer prereq.
-        exec /opt/hermes/.venv/bin/hermes -p daniel gateway run
+        exec /opt/hermes/.venv/bin/hermes -p ${OWNER_PROFILE} gateway run
 
-  hermes-daniel-team:
+  hermes-owner-team:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
-    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-daniel-team
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-hermes-${TEAM_PROFILE}
     user: "${HERMES_UID:-501}:${HERMES_GID:-20}"
     working_dir: /opt/data
     environment:
@@ -72,7 +84,7 @@ services:
       HERMES_YOLO_MODE: "1"
     env_file:
       - ./data/.env
-      - ./data/profiles/daniel-team/.env
+      - ./data/profiles/${TEAM_PROFILE}/.env
     volumes:
       - ./data:/opt/data
     depends_on:
@@ -88,7 +100,7 @@ services:
         ln -sf /opt/data/home/.bun/bin/bun /usr/local/bin/bun 2>/dev/null
         export HOME=/opt/data/home
         # NB: no apt-get at startup. PyYAML is wired by installer prereq.
-        exec /opt/hermes/.venv/bin/hermes -p daniel-team gateway run
+        exec /opt/hermes/.venv/bin/hermes -p ${TEAM_PROFILE} gateway run
 
   airbnb-courier:
     image: ${HERMES_IMAGE:-nousresearch/hermes-agent:latest}
@@ -108,7 +120,7 @@ services:
       - ./data:/opt/data
     depends_on:
       - hermes
-      - hermes-daniel
+      - hermes-owner
     restart: unless-stopped
     # PID 1 = bootstrap then exec tick loop.
     command:

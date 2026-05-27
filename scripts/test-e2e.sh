@@ -35,8 +35,9 @@ set -euo pipefail
 SCAFFOLD="${HERMES_SCAFFOLD_DIR:-/private/tmp/plow-seeds/hermes-agent}"
 DTU_URL="${DTU_URL:-http://127.0.0.1:8080}"
 HERMES_CONTAINER="${HERMES_CONTAINER:-seed-hermes-2568931506-hermes}"
-OWNER_PROFILE="${OWNER_PROFILE:-daniel}"
-TEAM_PROFILE="${TEAM_PROFILE:-daniel-team}"
+# REQUIRED; resolved from env or <scaffold>/.env below.
+OWNER_PROFILE="${OWNER_PROFILE:-}"
+TEAM_PROFILE="${TEAM_PROFILE:-}"
 
 GUEST_NAME="${GUEST_NAME:-Haynes Wood}"
 GUEST_PROPERTY="${GUEST_PROPERTY:-mtn-home}"
@@ -67,6 +68,25 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown arg: $1" >&2; exit 3 ;;
   esac
 done
+
+# Resolve OWNER_PROFILE / TEAM_PROFILE from env or scaffold .env. REQUIRED.
+_resolve_pf() {
+  local varname="$1" current="${!varname:-}"
+  if [[ -n "$current" ]]; then return; fi
+  local env_file="${SCAFFOLD%/}/.env"
+  if [[ -f "$env_file" ]]; then
+    current=$(awk -F= -v k="$varname" '$1==k{ sub(/^[^=]*=/,"",$0); print; exit }' "$env_file" \
+              | sed -E 's/^"//; s/"$//')
+  fi
+  if [[ -z "$current" ]]; then
+    echo "FAIL: \$$varname not set (env), and not found in ${env_file}." >&2
+    echo "      Run the installer first, or pass --owner-profile / --team-profile." >&2
+    exit 3
+  fi
+  eval "$varname=\"\${current}\""
+}
+_resolve_pf OWNER_PROFILE
+_resolve_pf TEAM_PROFILE
 
 # ANSI colors (printf %b interprets escape sequences)
 B=$'\033[1m'; R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; N=$'\033[0m'
@@ -222,7 +242,7 @@ fi
 
 # ============================================================================
 # STAGE 4: simulate the cleaner reply via Hermes CLI on the listener session
-#   This appends a user turn to the daniel-team profile's plow_chat session.
+#   This appends a user turn to the ${TEAM_PROFILE} profile's plow_chat session.
 #   The listener skill in that session fires Trigger B, finds the open ask,
 #   writes the verbatim answer into the brain page.
 # ============================================================================
