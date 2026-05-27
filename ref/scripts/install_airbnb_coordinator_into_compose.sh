@@ -95,6 +95,27 @@ command -v docker >/dev/null 2>&1 || { echo "docker not found on host PATH" >&2;
 [[ -f "${SCAFFOLD_DIR%/}/compose.yaml" ]] || { echo "compose.yaml not found in $SCAFFOLD_DIR" >&2; exit 1; }
 
 ENV_FILE="${SCAFFOLD_DIR%/}/.env"
+
+# Substrate defect #9 / #15: detect the ACTUAL container user instead of
+# trusting HERMES_UID/HERMES_GID from .env or defaulting to macOS 501/20.
+# The base hermes image runs as the user defined at image-build time
+# (10000 on the upstream image, 1001 on some prepare.sh-generated builds).
+# When the host UID baked into .env differs from the container's actual
+# UID, downstream `docker exec -u $HOST_UID` either fails (Permission
+# denied on container-owned files) or silently writes files the container
+# can't read.
+#
+# Detection order:
+#   1. --uid/--gid flag (explicit operator override)
+#   2. Live probe inside the running hermes container (canonical)
+#   3. .env HERMES_UID/HERMES_GID (legacy fallback)
+#   4. 501/20 fallback (macOS default; last resort)
+if [[ -z "$HERMES_UID_OVERRIDE" ]]; then
+  HERMES_UID_OVERRIDE="$(docker compose -f "${SCAFFOLD_DIR%/}/compose.yaml" --project-directory "${SCAFFOLD_DIR%/}" exec -T "$SERVICE" id -u 2>/dev/null | tr -d '\r' || true)"
+fi
+if [[ -z "$HERMES_GID_OVERRIDE" ]]; then
+  HERMES_GID_OVERRIDE="$(docker compose -f "${SCAFFOLD_DIR%/}/compose.yaml" --project-directory "${SCAFFOLD_DIR%/}" exec -T "$SERVICE" id -g 2>/dev/null | tr -d '\r' || true)"
+fi
 if [[ -z "$HERMES_UID_OVERRIDE" && -f "$ENV_FILE" ]]; then
   HERMES_UID_OVERRIDE="$(awk -F= '$1=="HERMES_UID"{print $2}' "$ENV_FILE")"
 fi
@@ -103,6 +124,7 @@ if [[ -z "$HERMES_GID_OVERRIDE" && -f "$ENV_FILE" ]]; then
 fi
 HERMES_UID_OVERRIDE="${HERMES_UID_OVERRIDE:-501}"
 HERMES_GID_OVERRIDE="${HERMES_GID_OVERRIDE:-20}"
+echo "   - hermes container user resolved: ${HERMES_UID_OVERRIDE}:${HERMES_GID_OVERRIDE}"
 
 EXEC=(docker compose -f "${SCAFFOLD_DIR%/}/compose.yaml" --project-directory "${SCAFFOLD_DIR%/}" exec -T -u "${HERMES_UID_OVERRIDE}:${HERMES_GID_OVERRIDE}" "$SERVICE")
 EXEC_ROOT=(docker compose -f "${SCAFFOLD_DIR%/}/compose.yaml" --project-directory "${SCAFFOLD_DIR%/}" exec -T -u 0:0 "$SERVICE")
@@ -429,6 +451,37 @@ EOF
   chown_inside_container "/opt/data/profiles/${OWNER_PROFILE}/config.yaml"
 fi
 
+# Substrate defect #22: `hermes profile create` produces an empty
+# config.yaml — no model: block. Per-profile services (hermes-daniel)
+# load the PROFILE's config.yaml first, not the scaffold's, so without
+# a model block here the boss webhook session crashes with "No inference
+# provider configured. Run 'hermes model' to choose a provider and model".
+# Mirror the scaffold's model block into the profile config if missing.
+if [[ -f "$OWNER_CFG_HOST" ]] && ! grep -qE '^model:' "$OWNER_CFG_HOST"; then
+  SCAFFOLD_CFG="${SCAFFOLD_DIR%/}/data/config.yaml"
+  if [[ -f "$SCAFFOLD_CFG" ]] && grep -qE '^model:' "$SCAFFOLD_CFG"; then
+    python3 - "$OWNER_CFG_HOST" "$SCAFFOLD_CFG" <<'PY'
+import sys, yaml, pathlib
+prof_p = pathlib.Path(sys.argv[1])
+scaf_p = pathlib.Path(sys.argv[2])
+prof = yaml.safe_load(prof_p.read_text()) or {}
+scaf = yaml.safe_load(scaf_p.read_text()) or {}
+if 'model' in scaf and 'model' not in prof:
+    # Insert model block at top of profile config (yaml.safe_dump rewrites order).
+    new = {'model': scaf['model']}
+    new.update(prof)
+    prof_p.write_text(yaml.safe_dump(new, default_flow_style=False, sort_keys=False))
+    print(f"   - mirrored scaffold model block into {prof_p.name}: provider={scaf['model'].get('provider')} default={scaf['model'].get('default')}")
+else:
+    print(f"   - model block already present in {prof_p.name} or scaffold has none; skip")
+PY
+    chown_inside_container "/opt/data/profiles/${OWNER_PROFILE}/config.yaml"
+  else
+    echo "   ⚠ scaffold config.yaml has no model: block — owner profile will inherit nothing." >&2
+    echo "     Run 'docker compose exec hermes hermes model' to set one before first webhook." >&2
+  fi
+fi
+
 # Patch 19: register the Hostex webhook subscription on the owner profile.
 # The subscription routes inbound POSTs to /webhooks/hostex-events into the
 # str-manager-approval skill. Without this, the boss never runs.
@@ -605,6 +658,14 @@ fi
 # ============================================================================
 echo ">>> Writing compose.airbnb-coordinator.yaml override…"
 cp -f "${REPO_DIR}/ref/compose/compose.airbnb-coordinator.yaml" "${SCAFFOLD_DIR%/}/compose.airbnb-coordinator.yaml"
+
+# Substrate defect #16 (Linux engineer) / original defect #2: ship the
+# Postgres backend override too. INSTALL.md Phase 9 documents that this
+# file exists; the installer is the canonical writer. Operators can edit
+# credentials in-place if desired — `gbrain init --url ...` (Phase 9)
+# reads whatever's set here.
+echo ">>> Writing compose.gbrain-postgres.yaml override…"
+cp -f "${REPO_DIR}/ref/compose/compose.gbrain-postgres.yaml" "${SCAFFOLD_DIR%/}/compose.gbrain-postgres.yaml"
 
 SIDECAR_ENV_HOST="${SCAFFOLD_DIR%/}/data/.airbnb-courier.env"
 if [[ ! -f "$SIDECAR_ENV_HOST" ]]; then

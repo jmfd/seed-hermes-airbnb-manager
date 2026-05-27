@@ -36,7 +36,7 @@ Verify all of these BEFORE starting. If any is missing, install it first or surf
 | `jq` | `jq --version` | `brew install jq` / `apt-get install -y jq` |
 | `HOSTEX_ACCESS_TOKEN` available | env var OR file the operator can point you at | **Required** — installer fails loud without it. Acceptable sources: env var, `~/.hostex-token` file, 1Password lookup. Hold the value in memory only — never echo, log, or commit. |
 | Free disk space | ~10 GB (Docker images + gbrain Postgres) | Free up space; the install does not gracefully degrade on disk-full |
-| Outbound network: `api.hostex.io`, `api.plow.co`, `api.openai.com`, `auth.openai.com`, GitHub | `curl -fsS` against each | If any is blocked, STOP — no workaround |
+| Outbound network: `api.hostex.io`, `api.plow.co`, `api.openai.com`, `auth.openai.com`, GitHub | `for h in https://api.hostex.io https://api.plow.co https://api.openai.com https://auth.openai.com https://github.com; do code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 "$h"); [ "$code" = "000" ] && echo "BLOCKED: $h" || echo "OK ($code): $h"; done` — treat any HTTP response as reachable; only `000` (no connection) is a fail. Do NOT use `curl -fsS` — these public root endpoints return 404 / 421 / 403 by design and -fsS exits 22 on non-2xx. | If any host is `000`, STOP — no workaround |
 | **OpenAI Codex OAuth access** | An OpenAI account that can complete the `auth.openai.com/codex/device` flow | The install requires Codex OAuth, **not** an `OPENAI_API_KEY` — see Phase 2.5. No API-key fallback. |
 
 Walltime budget: **~30 minutes**, plus ~5–10 minutes for the operator to complete the OAuth browser approval and any plow_chat / iMessage binding steps.
@@ -86,11 +86,15 @@ docker compose up -d hermes
 - `docker compose exec hermes hermes profile list` exits 0
 - Browse `http://localhost:9119` — Hermes dashboard loads
 
-Note the scaffold path for subsequent phases:
+Note the scaffold path AND resolve the container's actual UID/GID for subsequent phases (the upstream `nousresearch/hermes-agent` image runs as UID `10000`; older builds use `1001`; macOS-only docs sometimes assume `501:20`). Compute it once from the live container — do NOT hardcode `-u 501:20`:
 
 ```bash
 SCAFFOLD="$WORK_DIR/seed-hermes/hermes-agent"
+HERMES_USER=$(cd "$SCAFFOLD" && docker compose exec -T hermes id -u | tr -d '\r'):$(cd "$SCAFFOLD" && docker compose exec -T hermes id -g | tr -d '\r')
+echo "Container hermes runs as: $HERMES_USER"
 ```
+
+Every later `docker compose exec ... hermes ...` in this document uses `-u "$HERMES_USER"`. Don't substitute `501:20`.
 
 ---
 
@@ -142,7 +146,7 @@ If any check fails, STOP. Do not proceed.
 
 ```bash
 cd "$WORK_DIR/seed-hermes-plow-chat"
-HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_plow_chat_into_compose.sh
+HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_direct_mount.sh
 ```
 
 **Verify:**
@@ -177,12 +181,17 @@ grep -c 'PLOW_CHAT_TOKEN=..*'    "$SCAFFOLD/data/profiles/daniel-team/.env"   # 
 
 ## Phase 5 — Install seed-hermes-gbrain (CLI + entrypoint hook)
 
+gbrain needs an OpenAI API key for embeddings (semantic search). It is fine to use the same `OPENAI_API_KEY` the operator supplied for other steps — gbrain's embedding lookups are independent from Hermes' chat provider (which is `openai-codex` OAuth — see Phase 2.5; do NOT swap Hermes off Codex).
+
 ```bash
 cd "$WORK_DIR/seed-hermes-gbrain"
+# GBRAIN_EMBEDDING_API_KEY is REQUIRED — installer fails loud if absent.
+# OpenAI API key for embeddings ONLY (Hermes chat stays on Codex OAuth).
+export GBRAIN_EMBEDDING_API_KEY="${OPENAI_API_KEY:?OPENAI_API_KEY must be set for gbrain embeddings}"
 HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_gbrain_into_compose.sh
 ```
 
-**Note on PGLite:** the gbrain installer defaults to PGLite. On Apple Silicon macOS the PGLite WASM is known to crash on heavy write workloads (issue `garrytan/gbrain#223`). The airbnb-manager installer (Phase 9) ships a `compose.gbrain-postgres.yaml` Postgres backend override that's portable and avoids the WASM bug — Phase 10 below switches gbrain to it.
+**Note on PGLite:** the gbrain installer defaults to PGLite. On Apple Silicon macOS the PGLite WASM is known to crash on heavy write workloads (issue `garrytan/gbrain#223`). Phase 9 below ships a `compose.gbrain-postgres.yaml` (from `ref/compose/` in this repo, deployed by the airbnb-manager installer) that switches gbrain to a Postgres backend — portable and avoids the WASM bug.
 
 **Verify:**
 
@@ -194,7 +203,33 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_gbrain_into_compose.sh
 
 ## Phase 6 — Register the Hostex webhook subscription on `daniel`
 
-The webhook subscription tells Hermes "route Hostex `message_created` callbacks to the `str-manager-approval` skill". It must exist before Phase 9 installs the boss skill (the airbnb-manager installer's prereq checks for it).
+The webhook subscription tells Hermes "route Hostex `message_created` callbacks to the `str-manager-approval` skill". It must exist before Phase 8 installs the boss skill (the airbnb-manager installer's prereq checks for it).
+
+### Phase 6a — Enable the webhook platform on the `daniel` profile (REQUIRED before subscribe)
+
+`hermes webhook subscribe` will print `Webhook platform is not enabled` and refuse to write the subscription if `platforms.webhook.enabled` is absent from the profile's `config.yaml`. The plow-chat installer (Phase 3) does not write this block for the airbnb-manager's webhook needs. Add it explicitly:
+
+```bash
+DANIEL_CFG="$SCAFFOLD/data/profiles/daniel/config.yaml"
+python3 - "$DANIEL_CFG" <<'PY'
+import sys, yaml, pathlib
+p = pathlib.Path(sys.argv[1])
+d = yaml.safe_load(p.read_text()) if p.exists() else {}
+d = d or {}
+platforms = d.setdefault('platforms', {})
+wh = platforms.setdefault('webhook', {})
+wh['enabled'] = True
+extra = wh.setdefault('extra', {})
+extra.setdefault('host', '0.0.0.0')
+extra.setdefault('port', 8787)
+extra.setdefault('secret', 'INSECURE_NO_AUTH')
+platforms.setdefault('plow_chat', {})['enabled'] = True
+p.write_text(yaml.safe_dump(d, default_flow_style=False, sort_keys=False))
+print(f"  ✓ {p}: platforms.webhook.enabled=true, platforms.plow_chat.enabled=true")
+PY
+```
+
+### Phase 6b — Subscribe
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc "
@@ -205,11 +240,19 @@ The webhook subscription tells Hermes "route Hostex `message_created` callbacks 
 ")
 ```
 
-**Verify:**
+**Verify** — use `jq` for structural validation (`grep -c hostex-events` returns 2 because the subscription name appears in both the route key and the prompt body):
 
 ```bash
-grep -c hostex-events "$SCAFFOLD/data/profiles/daniel/webhook_subscriptions.json"   # expect 1
+jq -e '.["hostex-events"] // .subscriptions[]? | select(.name=="hostex-events")' \
+  "$SCAFFOLD/data/profiles/daniel/webhook_subscriptions.json" >/dev/null \
+  && echo "  ✓ hostex-events subscription present" \
+  || { echo "  ✗ hostex-events subscription missing"; exit 1; }
 ```
+
+### Caveats
+
+- **Port mismatch.** Running `hermes webhook subscribe` without a prior `platforms.webhook` block defaults to `port: 8644`. Phase 6a's explicit YAML write pins port `8787` to match `compose.airbnb-coordinator.yaml`'s host mapping (`127.0.0.1:8787 → 8787`). If you see `port: 8644` in `daniel/config.yaml` after Phase 6b, re-run Phase 6a (idempotent) — it overwrites to 8787.
+- **Hostex base URL + access token are baked into the subscription prompt literal.** The boss skill reads `hostex_base_url` and `hostex_access_token` from the webhook prompt template stored in `data/profiles/daniel/webhook_subscriptions.json`, NOT from runtime env. If you later change `HOSTEX_BASE_URL` (e.g. to swap DTU for real Hostex), you MUST re-run Phase 6b — re-registering with the same name updates the prompt. Editing `$HOSTEX_BASE_URL` in `.env` alone has no effect on the webhook path.
 
 ---
 
@@ -218,9 +261,36 @@ grep -c hostex-events "$SCAFFOLD/data/profiles/daniel/webhook_subscriptions.json
 ```bash
 cd "$WORK_DIR/seed-hostex-history-ingest"
 # Per the v0.2.0 README: surgical install. Copy the 4 container scripts,
-# distiller profile, and voice-synthesizer profile into the bind-mounted
-# scaffold. Do NOT run a full installer if one exists — surgical only.
-# Follow the README in this repo for exact paths.
+# the hostex-distiller profile, and the voice-synthesizer profile into
+# the bind-mounted scaffold. Follow the README for exact paths.
+HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_hostex_ingest_into_compose.sh
+```
+
+⚠ **Manual step — voice-synthesizer profile.** The current upstream
+`install_hostex_ingest_into_compose.sh` creates the `hostex-distiller`
+profile but **not** `voice-synthesizer`. Phase 7's verify below tests
+for both. Create voice-synthesizer manually until the upstream installer
+covers it:
+
+```bash
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" hermes hermes profile create voice-synthesizer)
+docker cp \
+  "$WORK_DIR/seed-hostex-history-ingest/ref/hermes-soul/voice-synthesizer-SOUL.md" \
+  "$(cd "$SCAFFOLD" && docker compose ps -q hermes):/opt/data/profiles/voice-synthesizer/SOUL.md"
+mkdir -p "$SCAFFOLD/data/profiles/voice-synthesizer/skills"
+cp -r "$WORK_DIR/seed-hostex-history-ingest/ref/hermes-skills/synthesize-voice" \
+   "$SCAFFOLD/data/profiles/voice-synthesizer/skills/"
+# Mirror the scaffold's model: block so it inherits provider: openai-codex
+python3 - "$SCAFFOLD/data/profiles/voice-synthesizer/config.yaml" "$SCAFFOLD/data/config.yaml" <<'PY'
+import sys, yaml, pathlib
+prof_p, scaf_p = map(pathlib.Path, sys.argv[1:])
+scaf = yaml.safe_load(scaf_p.read_text()) or {}
+prof = yaml.safe_load(prof_p.read_text()) if prof_p.exists() else {}
+prof = prof or {}
+if 'model' in scaf and 'model' not in prof:
+    prof = {'model': scaf['model'], **prof}
+    prof_p.write_text(yaml.safe_dump(prof, default_flow_style=False, sort_keys=False))
+PY
 ```
 
 **Verify:**
@@ -282,6 +352,25 @@ p.write_text("".join(out))
 PY
 fi
 
+# ⚠ LINUX OPERATORS — per-profile image caveat:
+# compose.airbnb-coordinator.yaml hardcodes `image: nousresearch/hermes-agent:latest`
+# for hermes-daniel + hermes-daniel-team + airbnb-courier. The
+# airbnb-coordinator installer applies runtime patches (SDK fixes,
+# webhook.py INSECURE_NO_AUTH bypass, /usr/local/bin/gbrain symlinks)
+# IMPERATIVELY into the running base hermes container's filesystem —
+# these patches DO NOT propagate to per-profile services that boot from
+# the pristine upstream image. On macOS this rarely bites because the
+# base hermes container also boots the per-profile compose hooks. On
+# Linux + DinD setups, per-profile services may come up without gbrain,
+# without the webhook bypass, etc.
+# If you hit this: either build a local image with patches baked in
+# (`image: seed-hermes/hermes-agent:local` + a Dockerfile in your
+# scaffold) OR re-run the airbnb installer after `docker compose up -d`
+# completes (the section-5b defensive cleanup re-applies the patches to
+# the running container — but only the base hermes container, NOT the
+# per-profile services).
+# Tracked as upstream defect #17; not yet fixed in this version.
+
 # Bring up the full stack (hermes-daniel + hermes-daniel-team + airbnb-courier + gbrain-postgres)
 (cd "$SCAFFOLD" && docker compose up -d)
 
@@ -291,12 +380,20 @@ until [[ $(docker inspect -f '{{.State.Health.Status}}' \
   sleep 2
 done
 
-# Point gbrain at Postgres (one-time init, replaces PGLite path)
-PROJECT_NAME=$(basename "$SCAFFOLD")
-(cd "$SCAFFOLD" && docker compose exec -T -u 501:20 -e HOME=/opt/data/home hermes bash -lc "
+# Point gbrain at Postgres (one-time init, replaces PGLite path).
+# NOTE: hostname is the bare Compose service name `gbrain-postgres` — the
+# compose network resolves this regardless of the scaffold directory name
+# or COMPOSE_PROJECT_NAME. Do NOT prefix with $PROJECT_NAME or basename
+# (those produce a non-resolving FQDN like hermes-agent-gbrain-postgres).
+# Embedding-model syntax is `openai:<model>` (gbrain provider:model form);
+# `openai-codex/<model>` is Hermes-Codex auth syntax and NOT recognized
+# by gbrain — gbrain reports `(?d)` dimensions and the install proceeds
+# with broken embedding lookups.
+HERMES_USER=$(cd "$SCAFFOLD" && docker compose exec -T hermes id -u | tr -d '\r'):$(cd "$SCAFFOLD" && docker compose exec -T hermes id -g | tr -d '\r')
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes bash -lc "
   gbrain init \
-    --url 'postgres://gbrain:gbrain_local_dev_only@${PROJECT_NAME}-gbrain-postgres:5432/gbrain' \
-    --embedding-model openai-codex/text-embedding-3-small
+    --url 'postgres://gbrain:gbrain_local_dev_only@gbrain-postgres:5432/gbrain' \
+    --embedding-model openai:text-embedding-3-small
 ")
 ```
 
@@ -304,7 +401,7 @@ PROJECT_NAME=$(basename "$SCAFFOLD")
 
 ```bash
 # Round-trip probe
-(cd "$SCAFFOLD" && docker compose exec -T -u 501:20 -e HOME=/opt/data/home hermes bash -lc '
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes bash -lc '
   echo "probe" | gbrain put test-init --content "install probe" && \
   gbrain get test-init | grep -q "install probe"
 ')
@@ -316,7 +413,7 @@ PROJECT_NAME=$(basename "$SCAFFOLD")
 ## Phase 10 — Run the initial historical backfill (`--limit 10` to validate)
 
 ```bash
-(cd "$SCAFFOLD" && docker compose exec -T -u 501:20 -e HOME=/opt/data/home hermes \
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes \
   bash -lc '/opt/data/home/hostex-ingest/initial-ingest.sh --limit 10')
 ```
 
@@ -326,13 +423,13 @@ Expect a per-conversation `processed=N` line every 30–60 seconds. Total runtim
 
 ```bash
 # Facts landed in gbrain
-(cd "$SCAFFOLD" && docker compose exec -T -u 501:20 -e HOME=/opt/data/home hermes bash -lc '
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes bash -lc '
   gbrain list -n 1000 | grep "^facts/" | wc -l
 ')
 # expect: at least 10 (more typical: 15–25; depends on how rich the 10 sample conversations were)
 
 # Quick semantic query
-(cd "$SCAFFOLD" && docker compose exec -T -u 501:20 -e HOME=/opt/data/home hermes bash -lc '
+(cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes bash -lc '
   gbrain query "wifi password"
 ')
 # expect: a [score] facts/<property>/wifi line in the output
@@ -393,7 +490,7 @@ These are the gates the deployed system must satisfy to count as working in prod
 | Gate | What it proves | One-line verify |
 |---|---|---|
 | **G1: Hostex webhook → boss → mirror to iPhone** | The basic ingest path: Hostex callback → boss skill → `plow_chat` mirror to owner | Fire a generic guest message via DTU. Operator's iPhone receives a mirror within ~60s. |
-| **G2: gbrain memory-hit** | The boss looks up facts via `gbrain query / gbrain get` (NOT filesystem); the wifi answer comes from the distilled fact page, NOT a hallucination | Phase 11 wifi test — `memory_cite.gbrain_slug == "facts/<property>/wifi"` in the pending entry. |
+| **G2: gbrain memory-hit** | The boss looks up facts via `gbrain query / gbrain get` (NOT filesystem); the answer comes from a distilled fact page, NOT a hallucination | Phase 11 — pick a topic the `--limit 10` backfill is likely to have distilled (check `gbrain list -n 1000 \| grep ^facts/` first; wifi may NOT be in a small sample of recent winter-themed conversations). Universal-ish topics: "check-in time", "wifi password", "parking", "heating". Fire a guest message via DTU asking about one of those; verify `memory_cite.gbrain_slug == "facts/<property>/<topic>"` in the pending entry. For full coverage on G2, run an unbounded backfill (omit `--limit`) before this gate. |
 | **G3: early-checkin 3-tier policy** | Boss correctly classifies an early-checkin request by request-vs-checkin-day delta. TIER 1 (future) → defer with no team consult; TIER 2 (night-before) → calendar check via hxctx; TIER 3 (morning-of) → cleaner consult via 8b consult flow | Fire `dtu guest send --from "Tier1Test" --content "Can I check in early on Saturday?"` (when Saturday is multiple days out). The boss should draft a deferral and NOT create a `q-*.md` brain query page. |
 | **G4: multi-employee consult flow** | When the boss decides a real guest question needs the cleaner, it auto-acks the guest, asks the cleaner via `plow_chat`, waits for the answer, drafts a final, mirrors to owner for approve, owner approves, Hostex POST ships | Fire `dtu guest send --from "ConsultTest" --content "Will the unit be ready for early check-in today?"`. Within ~90s: brain query page created at `data/home/brain/queries/q-*.md`; cleaner's iPhone receives an ask; owner's iPhone receives an auto-ack mirror with no approve prompt. After cleaner replies + courier wake, owner's iPhone receives a final draft mirror with `OK to send?`. |
 
@@ -401,7 +498,7 @@ These are the gates the deployed system must satisfy to count as working in prod
 
 ## Troubleshooting — defects we've seen + how they're fixed
 
-The substrate clean-install validation surfaced 17 defects. The top five and their resolutions in this version of the stack:
+Two clean-install validation runs (a macOS DinD substrate + a Linux Pi operator) surfaced 30+ defects across the 5 seeds. The top ten that bite airbnb-manager operators specifically, and their resolutions:
 
 | Symptom | Root cause | Fixed in |
 |---|---|---|
@@ -410,6 +507,10 @@ The substrate clean-install validation surfaced 17 defects. The top five and the
 | `airbnb-courier` sidecar exits at startup with `AIRBNB_OWNER_MIRROR_SESSION_KEY required` | The installer derived the session key into `data/profiles/daniel/.env` but left `data/.airbnb-courier.env` with the empty placeholder. | PR #8 — installer now syncs the derived value into both `.env` files in the same transaction. |
 | `hermes-daniel` gateway exits with `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing to start` | The local-DTU testing path uses the `INSECURE_NO_AUTH` secret with a `0.0.0.0` bind; Hermes has a safety rail that refuses this combo. The installer was supposed to patch `webhook.py` to lift the rail (per `REPRODUCIBILITY-PATCHES.md` #6) but never actually did. | PR #8 — installer now patches `/opt/hermes/gateway/platforms/webhook.py`, clears the bytecode cache, and verifies the patch marker post-write. |
 | Boss skill rejects valid `enabled: [plow-chat-platform]` inline YAML form, demands multiline form | Prereq check used `grep -qE '- plow-chat-platform'`. | PR #8 — switched to `python3 -c 'yaml.safe_load(...)'` structural parse. Accepts both list forms. |
+| Installer fails `FAIL: hermes user HOME is '/', expected '/opt/data'` even on a freshly-prepared scaffold | Installer trusted `HERMES_UID/HERMES_GID` from scaffold `.env` (host UID, often `1001` / `501`); the container actually runs as UID `10000`. `docker exec -u 1001` then hit container files owned by `10000` with no permission. | This PR — installer now live-probes the running hermes container (`docker compose exec hermes id -u/id -g`) and uses the actual container UID; `.env` is a legacy fallback only. INSTALL.md likewise computes `HERMES_USER` once from the live container. |
+| `gbrain init --url ...` fails with `getaddrinfo ENOTFOUND` or `(?d)` for embedding dimensions | INSTALL.md's example URL used `${PROJECT_NAME}-gbrain-postgres` (non-resolving FQDN) and embedding model `openai-codex/text-embedding-3-small` (Hermes-Codex syntax, not gbrain's `openai:<model>` form). | This PR — URL now bare `gbrain-postgres` (Compose service DNS name); embedding model now `openai:text-embedding-3-small`. |
+| Phase 6 `hermes webhook subscribe` fails with `Webhook platform is not enabled` | `hermes profile create` produces an empty profile config — no `platforms.webhook.enabled: true` block. Subscribe refuses to write the subscription. | This PR — INSTALL.md has a new Phase 6a that explicitly writes the `platforms.webhook` + `platforms.plow_chat` blocks via YAML structural edit BEFORE running subscribe. |
+| Boss session crashes with `No inference provider configured. Run 'hermes model'` on every webhook | `hermes profile create` makes an empty profile config — no `model:` block. The base hermes container reads `data/config.yaml` and has one, but per-profile services read `data/profiles/<name>/config.yaml` first. | This PR — installer now mirrors the scaffold's model block into `daniel/config.yaml` if missing (same code path as the existing daniel-team mirror). |
 
 If you hit a defect not on this list, capture: (a) which phase you were in, (b) the verbatim error, (c) what step exited non-zero. Open an issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
 

@@ -1,0 +1,40 @@
+# compose.gbrain-postgres.yaml — Postgres backend for gbrain
+#
+# Replaces PGLite WASM (blocked by `garrytan/gbrain#223` on Apple Silicon
+# macOS Docker). Use unconditionally on every fresh install — PGLite is
+# the gbrain installer's default but the WASM bug fires unpredictably on
+# any heavy write workload, and Postgres is portable across every platform.
+#
+# Deployed automatically by `install_airbnb_coordinator_into_compose.sh`
+# alongside `compose.airbnb-coordinator.yaml`. Operators can edit the
+# password if they want — `gbrain init --url ...` (run separately in
+# INSTALL.md Phase 9) reads whatever you put here.
+#
+# Service name `gbrain-postgres` is the Compose-network DNS hostname.
+# Use it bare in the gbrain URL — do NOT prefix with $COMPOSE_PROJECT_NAME
+# or basename (those resolve as FQDNs that don't exist on the network).
+
+services:
+  gbrain-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ${COMPOSE_PROJECT_NAME:-hermes}-gbrain-postgres
+    environment:
+      POSTGRES_USER: gbrain
+      POSTGRES_PASSWORD: gbrain_local_dev_only
+      POSTGRES_DB: gbrain
+    volumes:
+      - gbrain_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gbrain -d gbrain"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  hermes:
+    depends_on:
+      gbrain-postgres:
+        condition: service_healthy
+
+volumes:
+  gbrain_postgres_data:
