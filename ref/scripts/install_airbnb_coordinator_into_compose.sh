@@ -502,7 +502,7 @@ upsert_env "$OWNER_ENV_HOST" BRAIN_DIR /opt/data/home/brain
 # `hxctx` to api.hostex.io with no auth -> empty `[]` silently (no error).
 # The webhook path works without this (creds come from the subscription
 # prompt) but owner-direct queries return "0 bookings" for everything.
-# See REPRODUCIBILITY-PATCHES.md #34 and boss SKILL.md v12.2.1 step 6.6.
+# See boss SKILL.md v12.2.1 step 6.6.
 upsert_env "$OWNER_ENV_HOST" HOSTEX_BASE_URL "${HOSTEX_BASE_URL_FOR_BOSS:-https://api.hostex.io}"
 
 # HOSTEX_ACCESS_TOKEN must be present. Resolution order:
@@ -616,11 +616,10 @@ fi
 
 # Substrate defect #12: webhook adapter refuses to start when
 # INSECURE_NO_AUTH secret is paired with 0.0.0.0 bind (Hermes safety rail).
-# DTU testing requires 0.0.0.0 bind + INSECURE_NO_AUTH secret. The
-# REPRODUCIBILITY-PATCHES.md #6 says installer applies the bypass; this
-# block makes that real by editing /opt/hermes/gateway/platforms/webhook.py
+# DTU testing requires 0.0.0.0 bind + INSECURE_NO_AUTH secret. This block
+# applies the bypass by editing /opt/hermes/gateway/platforms/webhook.py
 # in the container + clearing bytecode cache + verifying.
-echo ">>> Applying INSECURE_NO_AUTH local-bypass to gateway webhook adapter (REPRODUCIBILITY-PATCHES.md #6)…"
+echo ">>> Applying INSECURE_NO_AUTH local-bypass to gateway webhook adapter…"
 WEBHOOK_PY=/opt/hermes/gateway/platforms/webhook.py
 if "${EXEC[@]}" grep -q "if False and secret == _INSECURE_NO_AUTH" "$WEBHOOK_PY" 2>/dev/null; then
   echo "   - webhook.py already patched (bypass active)"
