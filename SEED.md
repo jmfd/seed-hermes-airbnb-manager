@@ -46,6 +46,31 @@ Each seed has its own README + installer. This document orchestrates the
 five into a single working system; per-seed details are
 Implementation-defined by the respective seed README. ^dep-per-seed-readmes
 
+### §1.1 — Optional companion sub-seed: plow-airbnb-dashboard
+
+In addition to the five compose-layer seeds above, this SEED MAY install
+one OPTIONAL companion **sub-seed** at the very end of the run:
+`plow-pbc/seed-plow-airbnb-dashboard` — a calendar / reservation dashboard
+(a host-level `systemd` web service, plus a Chromium **kiosk** when the
+host has a display). When run as this sub-seed it installs on **this same
+main host machine** (the box running the Hermes stack), NOT into the
+compose stack and NOT onto a separate Raspberry Pi. Because it is a
+host-level service rather than a compose service, it is deliberately NOT
+part of the §1 dependency order: it neither extends nor verifies the five
+compose seeds. It is a trailing, independent sub-seed run only after the
+§15 acceptance gates pass. ^optional-dashboard-subseed
+
+Whether to install it is an **up-front opt-in** decision the operator MUST
+make in §2.1 — it is never installed silently. When opted in, the §16
+sub-seed phase runs **fully non-interactively**: it clones the dashboard
+repo and hands control to that repo's own `SEED.md` in its `local` mode on
+this host, reusing the `HOSTEX_ACCESS_TOKEN` already collected here as the
+sole calendar source. It MUST NOT prompt for anything — not the install
+mode or target, and not an `.ics` URL or Guesty pair. The dashboard web
+service is always installed; the Chromium kiosk is installed only if this
+host has a graphical display, and is otherwise silently skipped (no
+prompt). ^optional-dashboard-handoff
+
 ---
 
 ## §2 — Host prerequisites
@@ -82,6 +107,36 @@ done
 
 Walltime budget: ~30 minutes, plus ~5–10 minutes for operator browser
 interactions (Codex OAuth + plow_chat / iMessage binding). ^prereq-walltime
+
+### §2.1 — Up-front decision: install the optional dashboard sub-seed?
+
+Before Phase 1, the operator MUST decide whether this run will ALSO
+install the optional `plow-airbnb-dashboard` kiosk sub-seed (§1.1, §16).
+The decision MUST be made now — not discovered at the end — so the
+operator can satisfy its extra prerequisites before the long Hermes
+install begins. ^phase0-dashboard-optin
+
+```bash
+export INSTALL_DASHBOARD=no    # set to "yes" to also install the §16 kiosk sub-seed
+```
+
+If `INSTALL_DASHBOARD=yes`, **this main host** MUST additionally satisfy
+the rows below BEFORE Phase 1. The dashboard installs here (its `local`
+mode); its `SEED.md` `## Dependencies` is the authoritative list.
+^phase0-dashboard-prereqs
+
+| Prereq (dashboard only) | Required outcome | Anchor |
+|---|---|---|
+| Passwordless `sudo` for the install user **on this host** | REQUIRED — the dashboard hard-gates on it in its Step 3 (it installs apt packages + `systemd` units non-interactively). If absent, §16 STOPS with remediation rather than prompting. | ^prereq-dash-sudo |
+| (Kiosk only, OPTIONAL) an attached display + graphical session on this host | enables the Chromium kiosk. A **headless** host installs only the dashboard web service; the kiosk is silently skipped (no prompt). | ^prereq-dash-display |
+| At least one calendar source | satisfied automatically — the `HOSTEX_ACCESS_TOKEN` from ^prereq-hostex-token is reused as the sole source. No `.ics`/Guesty prompt occurs in sub-seed mode. | ^prereq-dash-source |
+
+Walltime: add ~5–10 minutes (local install on this host; no SSH).
+
+If the operator skips this export, §16 prompts once interactively when
+stdin is a TTY ("Also install the dashboard? [y/N]") and otherwise
+defaults to NOT installing the dashboard. That single y/N is the ONLY
+prompt the sub-seed ever issues. ^phase0-dashboard-default
 
 ---
 
@@ -680,7 +735,91 @@ production-ready. Any failure is install-not-complete. ^acceptance-gates
 
 ---
 
-## §16 — Known limitations still present today
+## §16 — Optional sub-seed: plow-airbnb-dashboard (Phase 12)
+
+This phase runs ONLY if the operator opted in at §2.1
+(`INSTALL_DASHBOARD=yes`, or an interactive "yes" when prompted). If
+`INSTALL_DASHBOARD` is unset or `no`, the install is **complete at §15** —
+skip this phase entirely. ^phase12-gate
+
+The dashboard is a **sub-seed**: a self-contained SEED with its own
+`SEED.md`. This phase installs it by the same pattern the §1 stack uses
+for its compose seeds — clone the repo, then run the seed's installer —
+with one difference: the dashboard's "installer" IS its `SEED.md`
+procedure, not a single shell script. This phase therefore clones the
+repo and then **follows that repo's `SEED.md` top to bottom**, passing in
+the values already collected here. ^phase12-subseed-pattern
+
+This phase runs **fully non-interactively** — after the one `[y/N]` opt-in
+(§2.1 / §16.1), it MUST NOT prompt again. It deploys to **this main host**
+in the dashboard SEED's `local` mode (NOT a separate Raspberry Pi and NOT
+into the compose stack), the install user is this host's `id -un`, and the
+dashboard SEED's per-block `tier-2` confirmations are waived for the
+sub-seed run (the operator already consented up front). ^phase12-target
+
+### §16.1 — Gate on the up-front opt-in
+
+```bash
+if [ "${INSTALL_DASHBOARD:-no}" != "yes" ]; then
+  echo "  INSTALL_DASHBOARD != yes — skipping the optional dashboard sub-seed."
+  echo "  Install is complete at §15. (Re-run §16 later by exporting INSTALL_DASHBOARD=yes.)"
+  exit 0
+fi
+```
+
+When `INSTALL_DASHBOARD` is unset and stdin is a TTY, the operator MUST be
+prompted ("Also install the plow-airbnb-dashboard kiosk sub-seed? [y/N]")
+and the answer treated as the value above. ^phase12-prompt
+
+### §16.2 — Clone the dashboard sub-seed
+
+```bash
+cd "$WORK_DIR"
+git clone --branch main \
+  https://github.com/plow-pbc/seed-plow-airbnb-dashboard.git
+test -f "$WORK_DIR/seed-plow-airbnb-dashboard/SEED.md" \
+  || { echo "MISSING: seed-plow-airbnb-dashboard/SEED.md"; exit 1; }
+```
+
+### §16.3 — Run the dashboard SEED non-interactively, reusing the Hostex credential
+
+The operator follows `seed-plow-airbnb-dashboard/SEED.md` top to bottom,
+in `local` mode on this host, with these fixed parameters (its Step 1 is
+satisfied from them — no prompts): ^phase12-cred-reuse
+
+- `INSTALL_MODE=local`, `TARGET_USER=$(id -un)` — Step 2 (SSH) is skipped.
+- The **sole** calendar source is the `HOSTEX_ACCESS_TOKEN` already
+  supplied for this run (^prereq-hostex-token). The sub-seed MUST NOT
+  prompt for an `.ics` URL or a Guesty pair — they are left empty. (To add
+  those, run the dashboard standalone later.)
+- The Chromium kiosk (its Step 5) is **best-effort**: if this host has a
+  graphical display, the kiosk is installed; if headless, only the
+  dashboard web service is installed and the kiosk is skipped — without
+  prompting for `DISPLAY`/`XAUTHORITY`.
+
+Secret hygiene is unchanged across the hand-off: the token is carried in
+the agent's context only — it MUST NOT be echoed, logged, written to the
+dashboard's `install.env`, or placed on any `argv`. It is written solely
+into the dashboard's mode-`600` `.env` by that SEED's Step 4. ^phase12-secret-hygiene
+
+### §16.4 — Verify
+
+Defer to the dashboard SEED's own `## Verify` block, with the kiosk gate
+relaxed for headless hosts. These MUST pass: the dashboard `systemd`
+service is `active`, `/healthz` returns `ok`, the `.env` is mode `600`
+with a credential set, and the units carry the real username (not
+`odio`). The kiosk service MUST be `active` **OR** intentionally skipped
+because the host is headless. If any non-kiosk gate fails, STOP and
+surface to the operator. ^v-phase12
+
+The two stacks are independent at runtime: the Hermes compose stack (§12)
+and the dashboard service (this phase) share only the Hostex credential,
+not a process, port, or network. A failure in one does not roll back the
+other. ^phase12-independence
+
+---
+
+## §17 — Known limitations still present today
 
 Multiple clean-install validation runs (macOS DinD substrate, Linux Pi
 operator) shook out ~30 defects across the 5 seeds. Most have been
@@ -708,7 +847,7 @@ issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
 
 ---
 
-## §17 — Open items + non-goals
+## §18 — Open items + non-goals
 
 ### Open
 
@@ -725,6 +864,13 @@ issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
   are deploy blockers for production use. Tracked separately; this seed
   installs but production deployment SHOULD wait for those fixes.
   ^o-str-manager-blockers
+- The §16 dashboard sub-seed hand-off is **agent-followed** (clone the
+  repo, then follow its `SEED.md` top to bottom) because the dashboard's
+  installer is its SEED, not a single script. A thin
+  `install_dashboard_subseed.sh` wrapper in `ref/scripts/` that gates on
+  `INSTALL_DASHBOARD`, clones the repo, and forwards the reused
+  `HOSTEX_ACCESS_TOKEN` would make §16 scriptable like §6–§11; pending a
+  follow-up PR. ^o-dashboard-subseed-script
 
 ### Non-Goals
 
@@ -764,3 +910,10 @@ issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
 - For per-seed implementation details, the operator SHOULD consult each
   seed's README. This document orchestrates; it does not duplicate the
   per-seed specs. ^ng-per-seed-duplication
+- As a sub-seed, the `plow-airbnb-dashboard` installs on **this main
+  host** (its `local` mode) as a host-level `systemd` service — NOT into
+  the compose stack and NOT onto a separate Raspberry Pi. This SEED does
+  not drive the dashboard's `remote`/Pi mode; to put the kiosk on a
+  separate Pi, run the dashboard SEED standalone. The dashboard is never
+  installed silently (opt-in at §2.1) and the two stacks share only the
+  Hostex credential at runtime. ^ng-dashboard-colocation

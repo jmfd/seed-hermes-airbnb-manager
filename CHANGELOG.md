@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Added — optional plow-airbnb-dashboard sub-seed (SEED §16)
+
+- SEED.md now integrates `plow-pbc/seed-plow-airbnb-dashboard` as an
+  OPTIONAL trailing **sub-seed**. New `^optional-dashboard-subseed` /
+  `^optional-dashboard-handoff` (§1.1) introduce it as a host-level
+  dashboard service (+ Chromium kiosk when the host has a display)
+  installed *after* the §15 acceptance gates — on **this main host**
+  (`local` mode), not into the compose stack and not onto a separate Pi.
+- New `^phase0-dashboard-optin` (§2.1) makes installation an **up-front
+  opt-in** (`INSTALL_DASHBOARD=yes`). The only added host prereqs are
+  passwordless `sudo` (`^prereq-dash-sudo`, REQUIRED) and an optional
+  display for the kiosk (`^prereq-dash-display`); the calendar source is
+  satisfied automatically by reusing the Hostex token (`^prereq-dash-source`).
+- New phase **§16** (`^phase12-*`, verify `^v-phase12`) runs the dashboard
+  SEED **fully non-interactively**: after the single `[y/N]` opt-in it
+  never prompts again — `local` mode, `id -un` target, `tier-2`
+  confirmations waived, the reused `HOSTEX_ACCESS_TOKEN` as the **sole**
+  source (no `.ics`/Guesty prompt, `^phase12-cred-reuse`), and a
+  best-effort kiosk that is skipped on a headless host. Secret hygiene is
+  preserved across the hand-off (`^phase12-secret-hygiene`); the §16.4
+  verify relaxes the kiosk gate for headless hosts.
+- §16/§17/§18 renumber (old §16 Known limitations → §17; old §17 Open +
+  Non-Goals → §18). Added `^o-dashboard-subseed-script` (a future scripted
+  wrapper) and `^ng-dashboard-colocation` (host-level install, not the
+  compose stack and not a separate Pi). Companion changes in the dashboard
+  SEED: `^dep-subseed` (non-interactive sub-seed contract + `local`
+  default), `^o-subseed`, and best-effort-kiosk notes on
+  `^act-deploy-kiosk` / `^v-kiosk-active`.
+
 ## 0.2.0 — 2026-05-25
 
 ### Added — hostex-context (Hostex deep integration)
