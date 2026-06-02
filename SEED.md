@@ -22,29 +22,25 @@ policy. Where this document gives an `Implementation-defined` example
 command, the operator MAY substitute an equivalent that produces the
 same observable outcome.
 
-`^anchors` mark normative requirements + verification gates that
-downstream tooling (validators, test harnesses, follow-up PRs) cite
-verbatim. Anchors MUST be stable across PR revisions of this document.
-
 ---
 
 ## §1 — The 5-seed dependency stack
 
 This SEED targets a host that has the following five plow-pbc seeds
 installed in dependency order. The order MUST be respected because each
-seed verifies + extends the previous one. ^dep-seed-order
+seed verifies + extends the previous one.
 
-| Order | Seed | Layer | Anchor |
-|---|---|---|---|
-| 1 | `plow-pbc/seed-hermes` | The base Hermes Agent Docker scaffold + Codex OAuth bootstrap | ^dep-seed-hermes |
-| 2 | `plow-pbc/seed-hermes-plow-chat` | The `plow_chat` platform plugin (iPhone iMessage / SMS as a Hermes channel) | ^dep-seed-plow-chat |
-| 3 | `plow-pbc/seed-hermes-gbrain` | The gbrain CLI + Hermes hook for memory queries (`gbrain query`/`get`/`put`) | ^dep-seed-gbrain |
-| 4 | `plow-pbc/seed-hostex-history-ingest` | Hostex conversation distiller + voice-synthesizer — populates gbrain with historical facts | ^dep-seed-hostex-ingest |
-| 5 | `plow-pbc/seed-hermes-airbnb-manager` | This repo — boss + listener + hostex-context + courier sidecar + install glue | ^dep-seed-airbnb-manager |
+| Order | Seed | Layer |
+|---|---|---|
+| 1 | `plow-pbc/seed-hermes` | The base Hermes Agent Docker scaffold + Codex OAuth bootstrap |
+| 2 | `plow-pbc/seed-hermes-plow-chat` | The `plow_chat` platform plugin (iPhone iMessage / SMS as a Hermes channel) |
+| 3 | `plow-pbc/seed-hermes-gbrain` | The gbrain CLI + Hermes hook for memory queries (`gbrain query`/`get`/`put`) |
+| 4 | `plow-pbc/seed-hostex-history-ingest` | Hostex conversation distiller + voice-synthesizer — populates gbrain with historical facts |
+| 5 | `plow-pbc/seed-hermes-airbnb-manager` | This repo — boss + listener + hostex-context + courier sidecar + install glue |
 
 Each seed has its own README + installer. This document orchestrates the
 five into a single working system; per-seed details are
-Implementation-defined by the respective seed README. ^dep-per-seed-readmes
+Implementation-defined by the respective seed README.
 
 ---
 
@@ -52,26 +48,25 @@ Implementation-defined by the respective seed README. ^dep-per-seed-readmes
 
 The host MUST satisfy every row in the table below BEFORE Phase 1 begins.
 Phase 1 SHOULD NOT start if any row is unmet — fix at the host level
-first. ^prereq-table
+first.
 
-| Prereq | Verification command | Required outcome | Anchor |
-|---|---|---|---|
-| OS: macOS (recent) or Linux | `uname -a` | Darwin or Linux kernel string | ^prereq-os |
-| Docker Desktop running | `docker info` | exits 0; reports `Server Version:` | ^prereq-docker |
-| `git` | `git --version` | exits 0 | ^prereq-git |
-| `gh` CLI authenticated (RECOMMENDED) | `gh auth status` | "Logged in to github.com" (HTTPS clone is an acceptable substitute) | ^prereq-gh |
-| `bun` runtime | `bun --version` | exits 0 (install via `curl -fsSL https://bun.sh/install \| bash`) | ^prereq-bun |
-| `jq` | `jq --version` | exits 0 (`brew install jq` / `apt-get install -y jq`) | ^prereq-jq |
-| `HOSTEX_ACCESS_TOKEN` available | env var, or path the operator can paste | non-empty string; held in memory only — MUST NOT be echoed, logged, or committed | ^prereq-hostex-token |
-| Free disk space | `df -h .` | ~10 GB free in `$WORK_DIR` (Docker images + gbrain Postgres) | ^prereq-disk |
-| Outbound network reachable | the curl loop in ^prereq-network-cmd | every host returns a non-`000` HTTP code | ^prereq-network |
-| OpenAI Codex OAuth | an OpenAI account that can complete `auth.openai.com/codex/device` | browser approval on §5 succeeds | ^prereq-codex-oauth |
+| Prereq | Verification command | Required outcome |
+|---|---|---|
+| OS: macOS (recent) or Linux | `uname -a` | Darwin or Linux kernel string |
+| Docker Desktop running | `docker info` | exits 0; reports `Server Version:` |
+| `git` | `git --version` | exits 0 |
+| `gh` CLI authenticated (RECOMMENDED) | `gh auth status` | "Logged in to github.com" (HTTPS clone is an acceptable substitute) |
+| `bun` runtime | `bun --version` | exits 0 (install via `curl -fsSL https://bun.sh/install \| bash`) |
+| `jq` | `jq --version` | exits 0 (`brew install jq` / `apt-get install -y jq`) |
+| `HOSTEX_ACCESS_TOKEN` available | env var, or path the operator can paste | non-empty string; held in memory only — MUST NOT be echoed, logged, or committed |
+| Free disk space | `df -h .` | ~10 GB free in `$WORK_DIR` (Docker images + gbrain Postgres) |
+| Outbound network reachable | the curl loop below | every host returns a non-`000` HTTP code |
+| OpenAI Codex OAuth | an OpenAI account that can complete `auth.openai.com/codex/device` | browser approval on §5 succeeds |
 
 The operator MUST run the following exact curl loop. Treat any HTTP
 response (even 404 / 421 / 403) as reachable; only `000` (no connection)
 is a fail. The operator MUST NOT use `curl -fsS` — these public root
 endpoints return non-2xx codes by design and `-fsS` exits 22 on non-2xx.
-^prereq-network-cmd
 
 ```bash
 for h in https://api.hostex.io https://api.plow.co https://api.openai.com https://auth.openai.com https://github.com; do
@@ -81,7 +76,7 @@ done
 ```
 
 Walltime budget: ~30 minutes, plus ~5–10 minutes for operator browser
-interactions (Codex OAuth + plow_chat / iMessage binding). ^prereq-walltime
+interactions (Codex OAuth + plow_chat / iMessage binding).
 
 ---
 
@@ -89,14 +84,14 @@ interactions (Codex OAuth + plow_chat / iMessage binding). ^prereq-walltime
 
 The host MUST use a fresh working directory. Cloning into an existing
 checkout is forbidden — substrate drift caused defects on every prior
-clean-install run. ^phase1-fresh-dir
+clean-install run.
 
 ```bash
 WORK_DIR="${HOME}/plow-seeds-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$WORK_DIR" && cd "$WORK_DIR"
 ```
 
-The host MUST clone all 5 seed repos from `main`. ^phase1-clone
+The host MUST clone all 5 seed repos from `main`.
 
 ```bash
 for repo in \
@@ -111,7 +106,7 @@ done
 ```
 
 **Verify** — every `*/ref/scripts/` (or `*/hermes-agent/scripts/`) MUST
-exist as a directory. ^v-phase1
+exist as a directory.
 
 ```bash
 for d in seed-hermes/hermes-agent/scripts \
@@ -130,7 +125,6 @@ echo "  ✓ all 5 seed scripts dirs present"
 
 The host MUST run `prepare.sh` from the `seed-hermes/hermes-agent/`
 directory + bring up the base `hermes` service via Docker Compose.
-^phase2-bootstrap
 
 ```bash
 cd "$WORK_DIR/seed-hermes/hermes-agent"
@@ -139,13 +133,13 @@ docker compose up -d hermes
 ./scripts/check-ready.sh   # blocks until the gateway is up
 ```
 
-**Verify** — all 3 gates MUST pass. ^v-phase2
+**Verify** — all 3 gates MUST pass.
 
-| Gate | Command | Expected | Anchor |
-|---|---|---|---|
-| Container up | `docker compose ps hermes` | status `Up` | ^v-phase2-ps |
-| CLI alive | `docker compose exec hermes hermes profile list` | exits 0 | ^v-phase2-cli |
-| Dashboard reachable | open `http://localhost:9119` | dashboard loads | ^v-phase2-dashboard |
+| Gate | Command | Expected |
+|---|---|---|
+| Container up | `docker compose ps hermes` | status `Up` |
+| CLI alive | `docker compose exec hermes hermes profile list` | exits 0 |
+| Dashboard reachable | open `http://localhost:9119` | dashboard loads |
 
 ### §4.1 — Resolve the container UID/GID (REQUIRED, used by later phases)
 
@@ -156,7 +150,7 @@ overlay; the image now does init+UID-remap natively) reads `HERMES_UID`
 in-container `hermes` user to match. The host MUST compute the
 post-remap UID/GID once from the live container and use it for every
 later `docker compose exec` invocation. The host MUST NOT hardcode
-`-u 501:20`. ^phase2-hermes-user
+`-u 501:20`.
 
 ```bash
 SCAFFOLD="$WORK_DIR/seed-hermes/hermes-agent"
@@ -170,7 +164,7 @@ This seed is **operator-neutral**. There is no canonical "Daniel" or
 other handle baked in. The operator MUST pick a lowercase handle for the
 owner profile + a matching team-listener handle (the convention is
 `<owner>` + `<owner>-team`, but any `[a-z][a-z0-9-]*` value is
-acceptable). ^phase2-owner-profile
+acceptable).
 
 ```bash
 export OWNER_PROFILE="owner"           # operator picks any handle
@@ -183,7 +177,6 @@ These exports MUST be readable by every later phase. The §11 installer
 / `${TEAM_PROFILE}` into per-profile gateway sidecars at compose-eval
 time. If the operator skips the exports, the §11 installer prompts
 interactively when stdin is a TTY and fails loud otherwise.
-^phase2-owner-profile-persistence
 
 ---
 
@@ -195,13 +188,11 @@ vault, the first LLM-invoking call (boss webhook, distiller backfill)
 crashes with `"No Codex credentials stored. Run hermes auth to
 authenticate."` — and the distiller failure is **silent in stdout**
 (backfill exits 0 with `processed=0` and no fact pages written).
-^phase25-codex-required
 
 The operator MUST run the canonical wrapper. No API-key fallback is
 supported by this seed. If device-code OAuth cannot complete on this
 machine (headless / CI / no browser), the operator MUST STOP — do not
 switch providers, do not substitute any other model + key combination.
-^phase25-no-api-key-fallback
 
 ```bash
 cd "$SCAFFOLD"
@@ -214,10 +205,9 @@ openai-codex`, parses the device-code output, and surfaces an
 open the URL in any browser signed into the operator's ChatGPT account,
 enter the code, and approve. The wrapper exits 0 only when Hermes prints
 `Added openai-codex OAuth credential #<N>` and writes `data/auth.json`.
-^phase25-wrapper
 
 **Verify** — both gates MUST pass; the smoke test MAY be skipped if the
-operator wants to defer model spend until §13. ^v-phase25
+operator wants to defer model spend until §13.
 
 ```bash
 docker compose run --rm -T hermes auth list
@@ -237,9 +227,9 @@ into the runtime (seed-hermes PR #5 + PR #6), so the smoke test SHOULD
 succeed first try. If the operator hits a stale image cached locally
 and the smoke test crashes with a `TypeError`, `docker pull
 nousresearch/hermes-agent:latest` + `docker compose up -d
---force-recreate hermes` MAY resolve it. ^phase25-stale-image-note
+--force-recreate hermes` MAY resolve it.
 
-If any required gate fails, the operator MUST STOP. ^v-phase25-stop
+If any required gate fails, the operator MUST STOP.
 
 ---
 
@@ -251,7 +241,7 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_direct_mount.sh
 ```
 
 **Verify** — plow-chat-platform MUST be listed by the in-container
-plugin index. ^v-phase3
+plugin index.
 
 ```bash
 docker compose --project-directory "$SCAFFOLD" exec -T hermes hermes plugins list | grep plow-chat-platform
@@ -264,7 +254,7 @@ docker compose --project-directory "$SCAFFOLD" exec -T hermes hermes plugins lis
 The operator MUST create both Hermes profiles using the handles chosen
 in §4.2. If §4.2 was skipped, the operator MUST set `OWNER_PROFILE` and
 `TEAM_PROFILE` now before continuing — they are referenced literally
-below. ^phase4-profile-create
+below.
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T hermes hermes profile create "$OWNER_PROFILE")
@@ -276,10 +266,10 @@ via `plow_chat` device-code. The activation helper lives at
 `$WORK_DIR/seed-hermes-plow-chat/ref/scripts/create_plow_chat_curl.sh`
 (or equivalent). The helper prints a URL + code; the operator completes
 the bind from the target iPhone (`$OWNER_PROFILE` = operator's phone;
-`$TEAM_PROFILE` = cleaner's phone). ^phase4-plow-chat-bind
+`$TEAM_PROFILE` = cleaner's phone).
 
 **Verify** — both profiles MUST have `PLOW_CHAT_CHAT_UID` and
-`PLOW_CHAT_TOKEN` set in their per-profile `.env`. ^v-phase4
+`PLOW_CHAT_TOKEN` set in their per-profile `.env`.
 
 ```bash
 grep -c 'PLOW_CHAT_CHAT_UID=..*' "$SCAFFOLD/data/profiles/$OWNER_PROFILE/.env"   # expect 1
@@ -296,7 +286,7 @@ gbrain REQUIRES an OpenAI API key for embeddings (semantic search). The
 operator MAY use the same `OPENAI_API_KEY` supplied for other steps —
 gbrain's embedding lookups are independent from Hermes' chat provider
 (which is `openai-codex` OAuth — see §5; the operator MUST NOT swap
-Hermes off Codex). ^phase5-embedding-key
+Hermes off Codex).
 
 ```bash
 cd "$WORK_DIR/seed-hermes-gbrain"
@@ -311,10 +301,9 @@ PGLite WASM is known to crash on heavy write workloads
 (`garrytan/gbrain#223`). §12 below installs a
 `compose.gbrain-postgres.yaml` (from `ref/compose/` in this repo,
 deployed by the airbnb-manager installer) that switches gbrain to a
-Postgres backend — portable + avoids the WASM bug. ^phase5-pglite-note
+Postgres backend — portable + avoids the WASM bug.
 
 **Verify** — `gbrain` MUST be on the in-container login-shell PATH.
-^v-phase5
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc 'command -v gbrain')   # expect /usr/local/bin/gbrain
@@ -327,7 +316,7 @@ Postgres backend — portable + avoids the WASM bug. ^phase5-pglite-note
 The subscription tells Hermes "route Hostex `message_created` callbacks
 to the `str-manager-approval` skill". It MUST exist BEFORE §11 installs
 the boss skill — the airbnb-manager installer's prereq checks require
-it. ^phase6-precondition
+it.
 
 ### §9.1 — Enable the webhook platform on the owner profile (Phase 6a, REQUIRED before subscribe)
 
@@ -337,7 +326,7 @@ The plow-chat installer (§6) does NOT write this block for the
 airbnb-manager's webhook needs. The operator MUST add it explicitly.
 (§11's installer ALSO performs this append idempotently as
 defense-in-depth — but the webhook subscribe in §9.2 runs BEFORE §11,
-so it MUST land here.) ^phase6a
+so it MUST land here.)
 
 ```bash
 OWNER_CFG="$SCAFFOLD/data/profiles/$OWNER_PROFILE/config.yaml"
@@ -374,7 +363,7 @@ fi
 **Verify** — the subscription MUST be present in the structural JSON
 output. The operator MUST use `jq` for validation (`grep -c
 hostex-events` returns 2 because the subscription name appears in both
-the route key and the prompt body). ^v-phase6
+the route key and the prompt body).
 
 ```bash
 jq -e '.["hostex-events"] // .subscriptions[]? | select(.name=="hostex-events")' \
@@ -390,7 +379,7 @@ jq -e '.["hostex-events"] // .subscriptions[]? | select(.name=="hostex-events")'
   YAML write pins port `8787` to match `compose.airbnb-coordinator.yaml`'s
   host mapping (`127.0.0.1:8787 → 8787`). If `port: 8644` appears in
   `$OWNER_PROFILE/config.yaml` after §9.2, the operator MUST re-run §9.1
-  (idempotent) — it overwrites to 8787. ^phase6-port-pin
+  (idempotent) — it overwrites to 8787.
 - **Hostex base URL + access token are baked into the subscription
   prompt literal.** The boss skill reads `hostex_base_url` and
   `hostex_access_token` from the prompt template stored in
@@ -398,7 +387,7 @@ jq -e '.["hostex-events"] // .subscriptions[]? | select(.name=="hostex-events")'
   later changes `HOSTEX_BASE_URL` (e.g. to swap DTU for real Hostex),
   the operator MUST re-run §9.2 — re-registering with the same name
   overwrites the prompt. Editing `$HOSTEX_BASE_URL` in `.env` alone has
-  no effect on the webhook path. ^phase6-base-url-baked
+  no effect on the webhook path.
 
 ---
 
@@ -412,7 +401,7 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" bash ref/scripts/install_hostex_ingest_into_comp
 The upstream installer creates the `hostex-distiller` profile but does
 NOT create `voice-synthesizer`. §10.1 below covers `voice-synthesizer`
 manually. (Tracked as upstream `seed-hostex-history-ingest` defect; this
-seed's installer covers it until upstream does.) ^phase7-voice-synth-manual
+seed's installer covers it until upstream does.)
 
 ### §10.1 — Voice-synthesizer profile (REQUIRED until upstream covers it)
 
@@ -438,7 +427,7 @@ if ! grep -qE '^model:' "$PROF_CFG" && grep -qE '^model:' "$SCAF_CFG"; then
 fi
 ```
 
-**Verify** — all three artifacts MUST exist. ^v-phase7
+**Verify** — all three artifacts MUST exist.
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T hermes bash -lc 'test -x /opt/data/home/hostex-ingest/initial-ingest.sh')
@@ -457,7 +446,7 @@ HERMES_SCAFFOLD_DIR="$SCAFFOLD" \
   bash ref/scripts/install_airbnb_coordinator_into_compose.sh
 ```
 
-The installer MUST: ^phase8-installer-contract
+The installer MUST:
 
 - Read `OWNER_PROFILE` + `TEAM_PROFILE` from the env exported in §4.2 (or
   prompt interactively if unset + stdin is a TTY) and persist them to
@@ -491,7 +480,7 @@ The installer MUST: ^phase8-installer-contract
 
 The gbrain installer defaults to PGLite. The operator MUST switch to the
 Postgres backend on macOS (avoids the WASM bug) and SHOULD use Postgres
-on every platform for portability. ^phase9-postgres-required
+on every platform for portability.
 
 ```bash
 # Add the Postgres override to COMPOSE_FILE chain (idempotent)
@@ -551,12 +540,11 @@ container's filesystem; that patch does NOT propagate to per-profile
 sidecars (separate container instances, no shared image layer for that
 file). The `hermes-owner` sidecar IS the one that binds the webhook
 adapter on `0.0.0.0:8787` with the `INSECURE_NO_AUTH` secret — so it
-trips the safety rail. ^phase9-sidecar-patch-gap
+trips the safety rail.
 
 If the operator observes `hermes-owner` crashing at startup with
 `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing
 to start`, the operator MUST apply the patch inside the live sidecar:
-^phase9-sidecar-patch-workaround
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T -u 0:0 hermes-owner \
@@ -572,10 +560,9 @@ and is pending a follow-up PR. seed-hermes PR #6 deleted the local
 Dockerfile + `seed-entrypoint.sh` overlays (upstream image now does
 init+UID-remap natively via s6-overlay), so "build a local image with
 patches baked in" is NOT the workaround anymore — the per-sidecar
-`docker exec` is. ^phase9-sidecar-fix-pending
+`docker exec` is.
 
 **Verify** — gbrain MUST be reachable via Postgres + round-trippable.
-^v-phase9
 
 ```bash
 (cd "$SCAFFOLD" && docker compose exec -T -u "$HERMES_USER" -e HOME=/opt/data/home hermes bash -lc '
@@ -597,7 +584,7 @@ patches baked in" is NOT the workaround anymore — the per-sidecar
 Expected: a per-conversation `processed=N` line every 30–60 seconds.
 Total runtime: ~5–8 minutes for 10 conversations.
 
-**Verify** — both gates MUST pass. ^v-phase10
+**Verify** — both gates MUST pass.
 
 ```bash
 # Facts landed in gbrain
@@ -614,11 +601,10 @@ Total runtime: ~5–8 minutes for 10 conversations.
 ```
 
 If `processed=0` or `facts/` count is 0, the operator MUST STOP — most
-likely Codex OAuth is not actually wired (re-run §5 verify). ^v-phase10-stop
+likely Codex OAuth is not actually wired (re-run §5 verify).
 
 The operator MAY then run an unbounded backfill (omit `--limit`) for
 full historical coverage — ~3–6 hours for 343 conversations.
-^phase10-full-backfill
 
 ---
 
@@ -627,7 +613,7 @@ full historical coverage — ~3–6 hours for 343 conversations.
 The seed ships a Digital Twin Universe (DTU) — a local Hostex stand-in
 for testing without involving real guests. If the `seed-hermes`
 scaffold does not include a DTU CLI, the operator MUST install Flask +
-the DTU server per the seed's `dev-harness/` README. ^phase11-dtu-required
+the DTU server per the seed's `dev-harness/` README.
 
 ```bash
 # Register a webhook subscription pointing at the boss's port
@@ -637,7 +623,7 @@ dtu webhook set http://127.0.0.1:8787/webhooks/hostex-events --events message_cr
 dtu guest send --property mtn-home --from "AcceptanceTest" --content "Hi, what is the wifi password?"
 ```
 
-**Verify** — all 3 gates MUST pass within ~90 seconds. ^v-phase11
+**Verify** — all 3 gates MUST pass within ~90 seconds.
 
 ```bash
 # DTU MUST log a webhook_delivered event with status 202
@@ -654,7 +640,6 @@ dtu events | grep webhook_delivered | tail -1
 ```
 
 The operator's iPhone MUST receive a `plow_chat` mirror of the form:
-^v-phase11-iphone
 
 ```
 AcceptanceTest (Mtn Home): "Hi, what is the wifi password?"
@@ -669,14 +654,14 @@ OK to send?
 ## §15 — Production acceptance gates (run after §14)
 
 These four gates MUST all pass for the install to count as
-production-ready. Any failure is install-not-complete. ^acceptance-gates
+production-ready. Any failure is install-not-complete.
 
-| Gate | What it proves | Verification | Anchor |
-|---|---|---|---|
-| **G1** Webhook → boss → mirror | The basic ingest path: Hostex callback → boss skill → `plow_chat` mirror to owner | Fire a generic guest message via DTU. Operator's iPhone MUST receive a mirror within ~60s. | ^g1-webhook-mirror |
-| **G2** gbrain memory-hit | The boss MUST look up facts via `gbrain query / gbrain get` (NOT filesystem); the answer MUST come from a distilled fact page, NOT hallucination | Pick a topic the `--limit 10` backfill is likely to have distilled (check `gbrain list -n 1000 \| grep ^facts/` first; wifi may NOT be in a small sample of recent winter-themed conversations). Universal-ish topics: "check-in time", "wifi password", "parking", "heating". Fire a guest message via DTU; verify `memory_cite.gbrain_slug == "facts/<property>/<topic>"` in the pending entry. For full coverage on G2, run an unbounded backfill (omit `--limit`) before this gate. | ^g2-memory-hit |
-| **G3** Early-checkin 3-tier policy | Boss correctly classifies early-checkin by request-vs-checkin-day delta. TIER 1 (future) → defer with no team consult; TIER 2 (night-before) → calendar check via hxctx; TIER 3 (morning-of) → cleaner consult via 8b consult flow | Fire `dtu guest send --from "Tier1Test" --content "Can I check in early on Saturday?"` (when Saturday is multiple days out). The boss MUST draft a deferral and MUST NOT create a `q-*.md` brain query page. | ^g3-early-checkin |
-| **G4** Multi-employee consult flow | When the boss decides a real guest question needs the cleaner, it MUST auto-ack the guest, ask the cleaner via `plow_chat`, wait for the answer, draft a final, mirror to owner for approve, owner approves, Hostex POST ships | Fire `dtu guest send --from "ConsultTest" --content "Will the unit be ready for early check-in today?"`. Within ~90s: brain query page MUST be created at `data/home/brain/queries/q-*.md`; cleaner's iPhone MUST receive an ask; owner's iPhone MUST receive an auto-ack mirror with no approve prompt. After cleaner replies + courier wake, owner's iPhone MUST receive a final draft mirror with `OK to send?`. | ^g4-consult-flow |
+| Gate | What it proves | Verification |
+|---|---|---|
+| **G1** Webhook → boss → mirror | The basic ingest path: Hostex callback → boss skill → `plow_chat` mirror to owner | Fire a generic guest message via DTU. Operator's iPhone MUST receive a mirror within ~60s. |
+| **G2** gbrain memory-hit | The boss MUST look up facts via `gbrain query / gbrain get` (NOT filesystem); the answer MUST come from a distilled fact page, NOT hallucination | Pick a topic the `--limit 10` backfill is likely to have distilled (check `gbrain list -n 1000 \| grep ^facts/` first; wifi may NOT be in a small sample of recent winter-themed conversations). Universal-ish topics: "check-in time", "wifi password", "parking", "heating". Fire a guest message via DTU; verify `memory_cite.gbrain_slug == "facts/<property>/<topic>"` in the pending entry. For full coverage on G2, run an unbounded backfill (omit `--limit`) before this gate. |
+| **G3** Early-checkin 3-tier policy | Boss correctly classifies early-checkin by request-vs-checkin-day delta. TIER 1 (future) → defer with no team consult; TIER 2 (night-before) → calendar check via hxctx; TIER 3 (morning-of) → cleaner consult via 8b consult flow | Fire `dtu guest send --from "Tier1Test" --content "Can I check in early on Saturday?"` (when Saturday is multiple days out). The boss MUST draft a deferral and MUST NOT create a `q-*.md` brain query page. |
+| **G4** Multi-employee consult flow | When the boss decides a real guest question needs the cleaner, it MUST auto-ack the guest, ask the cleaner via `plow_chat`, wait for the answer, draft a final, mirror to owner for approve, owner approves, Hostex POST ships | Fire `dtu guest send --from "ConsultTest" --content "Will the unit be ready for early check-in today?"`. Within ~90s: brain query page MUST be created at `data/home/brain/queries/q-*.md`; cleaner's iPhone MUST receive an ask; owner's iPhone MUST receive an auto-ack mirror with no approve prompt. After cleaner replies + courier wake, owner's iPhone MUST receive a final draft mirror with `OK to send?`. |
 
 ---
 
@@ -690,21 +675,37 @@ remap natively, no derived image needed), seed-hermes-gbrain PRs #3–#4
 seed-hermes-airbnb-manager PRs #8/#10/#11 (installer hardening +
 OWNER_PROFILE operator-neutrality). This section enumerates **only
 still-present limitations** an operator MAY hit on a fresh install
-today. ^limitations-scope
+today.
 
-| Symptom | Root cause | Workaround | Anchor |
-|---|---|---|---|
-| `hermes-owner` sidecar exits at startup with `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing to start` | §11's installer patches `webhook.py` in the BASE `hermes` container; per-profile sidecar `hermes-owner` boots from pristine `:latest` in §12 so its `webhook.py` is unpatched. It IS the sidecar that binds the webhook adapter. | §12.1's manual patch + `docker compose restart hermes-owner`. Code-level fix pending. | ^lim-sidecar-webhook |
-| Swapping `HOSTEX_BASE_URL` in the owner profile `.env` does NOT change where the boss POSTs. | `hostex_base_url` + `hostex_access_token` are baked into the webhook subscription prompt template (see §9.3). The boss reads them from the prompt, NOT from runtime env. | Re-run §9.2 with new values. `hermes webhook subscribe` with the same name overwrites the existing subscription's prompt — idempotent. (The owner-direct-chat `hxctx` path DOES read from runtime env and DOES pick up `.env` edits.) | ^lim-base-url-baked |
-| `HOSTEX_ACCESS_TOKEN` visible in `webhook_subscriptions.json` (mode 644 by default). | Same root cause as ^lim-base-url-baked. The Hermes webhook adapter has no per-prompt secret-substitution mechanism today. | The operator SHOULD tighten mode: `chmod 600 "$SCAFFOLD/data/profiles/$OWNER_PROFILE/webhook_subscriptions.json"`. (The §11 installer already chmods the owner profile `.env` to 600.) | ^lim-token-in-prompt |
-| Distiller backfill exits 0 with `processed=0` | Most commonly: Codex OAuth credential revoked or `data/auth.json` stale. §5 catches this for the BASE container at install time, but credentials can expire later. | Re-run `./scripts/auth-openai-codex.sh` from `$SCAFFOLD`. Re-verify with `docker compose run --rm -T hermes auth list \| grep openai-codex`. | ^lim-codex-expiry |
-| `voice-synthesizer` profile missing after §10 | Upstream `install_hostex_ingest_into_compose.sh` creates `hostex-distiller` but not `voice-synthesizer`. | §10.1 covers the manual addition. (Tracked as upstream `seed-hostex-history-ingest` defect; this row will be removed when the upstream installer covers it.) | ^lim-voice-synth-manual |
+#### Per-profile sidecar webhook adapter unpatched
+
+- **Symptom:** `hermes-owner` sidecar exits at startup with `webhook error: INSECURE_NO_AUTH ... non-loopback 0.0.0.0 ... refusing to start`.
+- **Root cause:** §11's installer patches `webhook.py` in the BASE `hermes` container; per-profile sidecar `hermes-owner` boots from pristine `:latest` in §12 so its `webhook.py` is unpatched. It IS the sidecar that binds the webhook adapter.
+- **Workaround:** §12.1's manual patch + `docker compose restart hermes-owner`. Code-level fix pending.
+
+#### Hostex base URL and token baked into the subscription prompt
+
+- **Symptom:** Swapping `HOSTEX_BASE_URL` in the owner profile `.env` does NOT change where the boss POSTs.
+- **Root cause:** `hostex_base_url` + `hostex_access_token` are baked into the webhook subscription prompt template (see §9.3). The boss reads them from the prompt, NOT from runtime env.
+- **Workaround:** Re-run §9.2 with new values. `hermes webhook subscribe` with the same name overwrites the existing subscription's prompt — idempotent. (The owner-direct-chat `hxctx` path DOES read from runtime env and DOES pick up `.env` edits.)
+
+#### Voice-synthesizer profile missing
+
+- **Symptom:** `voice-synthesizer` profile missing after §10.
+- **Root cause:** Upstream `install_hostex_ingest_into_compose.sh` creates `hostex-distiller` but not `voice-synthesizer`.
+- **Workaround:** §10.1 covers the manual addition. (Tracked as upstream `seed-hostex-history-ingest` defect; this row will be removed when the upstream installer covers it.)
+
+The remaining still-present limitations:
+
+| Symptom | Root cause | Workaround |
+|---|---|---|
+| `HOSTEX_ACCESS_TOKEN` visible in `webhook_subscriptions.json` (mode 644 by default). | Same root cause as [Hostex base URL and token baked into the subscription prompt](#hostex-base-url-and-token-baked-into-the-subscription-prompt) above. The Hermes webhook adapter has no per-prompt secret-substitution mechanism today. | The operator SHOULD tighten mode: `chmod 600 "$SCAFFOLD/data/profiles/$OWNER_PROFILE/webhook_subscriptions.json"`. (The §11 installer already chmods the owner profile `.env` to 600.) |
+| Distiller backfill exits 0 with `processed=0` | Most commonly: Codex OAuth credential revoked or `data/auth.json` stale. §5 catches this for the BASE container at install time, but credentials can expire later. | Re-run `./scripts/auth-openai-codex.sh` from `$SCAFFOLD`. Re-verify with `docker compose run --rm -T hermes auth list \| grep openai-codex`. |
 
 If the operator hits a defect not listed above, the operator MUST
 capture: (a) which phase the failure occurred in, (b) the verbatim
 error, (c) which step exited non-zero. The operator SHOULD open an
 issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
-^lim-issue-triad
 
 ---
 
@@ -713,54 +714,49 @@ issue against `plow-pbc/seed-hermes-airbnb-manager` with that triad.
 ### Open
 
 - A code-level fix for the per-profile sidecar `webhook.py` patch
-  (^lim-sidecar-webhook) — inlining the patch into the sidecar's
+  (the [sidecar webhook limitation](#per-profile-sidecar-webhook-adapter-unpatched)) — inlining the patch into the sidecar's
   startup `command:` in `compose.airbnb-coordinator.yaml` — is the
-  right structural answer and is pending a follow-up PR. ^o-sidecar-fix
+  right structural answer and is pending a follow-up PR.
 - A code-level fix for the upstream voice-synthesizer absence
-  (^lim-voice-synth-manual) — pushing the §10.1 logic into
+  (the [voice-synthesizer limitation](#voice-synthesizer-profile-missing)) — pushing the §10.1 logic into
   `install_hostex_ingest_into_compose.sh` — is pending in
-  `plow-pbc/seed-hostex-history-ingest`. ^o-voice-synth-upstream
+  `plow-pbc/seed-hostex-history-ingest`.
 - The 3 outstanding `seed-plow-str-manager` blockers (manual session
   key construction, INSECURE_NO_AUTH + public tunnel, secret-in-prompt)
   are deploy blockers for production use. Tracked separately; this seed
   installs but production deployment SHOULD wait for those fixes.
-  ^o-str-manager-blockers
 
 ### Non-Goals
 
 - This SEED does not document the Hostex API; see
   `seedlab/seeds/airbnb-manager.seed.md` and its captured wire samples.
-  ^ng-hostex-api
 - This SEED does not document the Plow Chat API; see `seed-plow-chat`.
-  ^ng-plow-chat-api
 - This SEED does not document the Hermes Agent runtime; see
-  `seed-hermes`. ^ng-hermes-runtime
+  `seed-hermes`.
 - This SEED does not document gbrain; see `seed-hermes-gbrain` and the
-  upstream gbrain repo. ^ng-gbrain
+  upstream gbrain repo.
 - This SEED does not implement group-chat consultation (one chat with
   multiple team members at once). Per CEO premise, "no groups."
-  ^ng-groups
 - This SEED does not implement guest-side broadcast (one boss message
-  to multiple guests). Out of scope. ^ng-guest-broadcast
+  to multiple guests). Out of scope.
 - This SEED does not commit, log, or print Plow Chat secrets, Hostex
   tokens, or owner channel tokens. Anywhere a token would appear in
   this document's example commands, the example references the env var
-  name only (`$HOSTEX_ACCESS_TOKEN`), never a literal value. ^ng-secrets
+  name only (`$HOSTEX_ACCESS_TOKEN`), never a literal value.
 - This SEED MUST NOT use an API-key fallback in place of Codex OAuth.
   The boss skill, distiller, and listener all assume `openai-codex` and
   expect device-code OAuth. API-key paths (`provider: custom +
   OPENAI_API_KEY`) work in isolation but diverge from validated
   production behavior — drafts use a different model, voice synthesizer
   outputs differ, and the install is not a faithful reproduction of
-  the production stack. ^ng-api-key-fallback
+  the production stack.
 - This SEED MUST NOT install the `gbrain-sync` sidecar (removed in
   v0.2.x). Older installs may have it lingering in
   `compose.gbrain.yaml`; the §11 installer's defensive cleanup removes
-  it. ^ng-gbrain-sync
+  it.
 - This SEED does not document the production Hostex tunnel setup. DTU
   is the test stand-in; production uses a real Hostex tunnel registered
   against `auth.openai.com`-side credentials, configured out of band.
-  ^ng-production-tunnel
 - For per-seed implementation details, the operator SHOULD consult each
   seed's README. This document orchestrates; it does not duplicate the
-  per-seed specs. ^ng-per-seed-duplication
+  per-seed specs.

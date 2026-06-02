@@ -44,10 +44,10 @@
   verbatim (callback parser, `User-Agent: curl/8.7.1`,
   `POST /v3/conversations/{id}` body `message`). Credentials flow from the webhook
   prompt via `--base-url`/`--token` — never hardcoded.
-- Installer deploys hostex-context to `/opt/data/home/hostex-context/`
-  (`^act-hostex-context-install`); `verify.sh` gains check **V3f**; SEED.md gains
-  `^obj-hostex-context-installed`, `^act-boss-hostex-context`, and
-  `^v-hostex-context`.
+- Installer deploys hostex-context to `/opt/data/home/hostex-context/` (new
+  install step); `verify.sh` gains check **V3f**; SEED.md gains the
+  hostex-context-installed object, the boss's hostex-context lookup action, and
+  a hostex-context verify check.
 - `ref/dev-harness/dtu.py` — the DTU (Digital Twin of hostex.io) **as real,
   runnable code in this project** (not a patch). Implements `GET /v3/reservations`,
   `POST /v3/listings/calendar`, `GET /v3/availabilities`, and `/admin` + CLI
