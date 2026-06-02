@@ -1033,18 +1033,20 @@ Classify the owner's reply semantically:
      credentials. When inspecting files or logs, never print the token; mask it
      in diagnostics and use it only inside the Hostex API request.
 2. UTC timestamp: `date -u +%Y-%m-%dT%H:%M:%SZ`.
-3. Ship to guest via Hostex API (CONTRACT UNCHANGED):
-   - `POST {hostex_base_url}/v3/conversations/{conversation_id}`
-   - Headers: `Hostex-Access-Token: {hostex_access_token}`,
-     `User-Agent: curl/8.7.1`, `Content-Type: application/json`
-   - Body: `{"message":"<draft>"}`
-   - Expect 200 or 202. On error, write outbox with `delivered:false` and
-     error note; reply to owner `Errore consegnando a hostex: <reason>` and
-     STOP. Do not remove the pending entry / advance the query page.
-4. Append a JSONL line to `/opt/data/home/.airbnb-manager/outbox.jsonl`:
-   ```json
-   {"ts":"<timestamp>","id":"<ref-id>","conversation_id":"<conv>","approved":true,"delivered":true,"sent_content":"<draft>"}
-   ```
+3. **Ship to guest via the DETERMINISTIC shipper — do NOT hand-roll a curl/python wrapper.** Ad-hoc wrappers silently break on em-dash `—` and curly quotes `’ “ ”` in drafts: the message may LOOK sent but never reach Hostex (delivered:true + "Sent" with nothing on Hostex). Instead:
+   a. Write the EXACT draft text (preserving Unicode) to a temp file:
+      `python3 -c 'import sys;open("/tmp/reply.txt","w").write(sys.argv[1])' "<draft>"`
+   b. Run EXACTLY:
+      `bash /opt/data/home/airbnb-courier/ship-reply.sh "<conversation_id>" /tmp/reply.txt "<ref-id>"`
+      It POSTs to Hostex, REQUIRES http 200 + `error_code:200`, then RE-VERIFIES via GET that the
+      host reply actually landed (Hostex propagation is async ~45-60s), and writes the outbox row
+      itself (delivered:true on success, delivered:false on failure).
+   c. **GATE on its result — this is the delivery PROOF, never your assumption:**
+      - exit 0 / prints `SHIP_OK`  -> delivery CONFIRMED. Continue to step 5, then reply `Sent.`
+      - exit non-zero / prints `SHIP_FAILED: <reason>` -> delivery did NOT happen. Reply to the
+        owner `Delivery to Hostex FAILED: <reason>` and STOP. Do NOT say "Sent", do NOT remove the
+        pending entry, do NOT advance/close the query page.
+4. (The outbox row is written by ship-reply.sh in step 3 - do NOT append a second row.)
 5. POST-SHIP BOOKKEEPING:
    - PIRATE: remove the processed id from `pirate-joker-pending.json`. Write back.
    - COORDINATOR: mark the draft delivered + close the query if it was a final draft:

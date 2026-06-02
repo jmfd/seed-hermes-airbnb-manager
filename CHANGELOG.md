@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 — 2026-06-02
+
+### Fixed — owner-approve auto-ship "false sent" (delivery reliability)
+
+- **Root cause:** Branch A had the boss build an ad-hoc curl/python wrapper to POST the
+  approved reply to Hostex. The wrapper could fail silently on Unicode em-dash / curly
+  quotes in drafts, yet the boss still wrote `outbox delivered:true` and replied "Sent" —
+  so the owner saw "sent" while the guest received nothing.
+- **Fix:** new deterministic `ref/courier/ship-reply.sh` (POST -> require http 200 +
+  `error_code:200` -> RE-VERIFY via GET that the host reply landed, polling for Hostex's
+  async propagation -> only then append the outbox row). Branch A in
+  `ref/hermes-skills/airbnb-coordinator-boss/SKILL.md` now calls this script and only says
+  "Sent" on `SHIP_OK`; on `SHIP_FAILED` it reports the error to the owner and keeps the
+  draft pending. Installer deploys `ship-reply.sh` alongside `query-edit.py`.
+
+### Added — owner phone-number swap procedure
+
+- `docs/owner-number-swap.md`: reproducible runbook to move the owner's plow_chat approval
+  channel to a new phone — device-code re-bind, authorize the new `cp_` identity on inbound
+  pairing, propagate the new channel to all baked locations (.env + webhook_subscriptions.json
+  + channel_directory.json + .airbnb-courier.env), restart, verify both directions, rollback.
+
+
 ## 0.2.0 — 2026-05-25
 
 ### Added — hostex-context (Hostex deep integration)

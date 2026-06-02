@@ -427,10 +427,12 @@ HOST_COURIER_DIR="${SCAFFOLD_DIR%/}/data/home/airbnb-courier"
 mkdir -p "$HOST_COURIER_DIR"
 cp -f "${REPO_DIR}/ref/courier/query-edit.py" "${HOST_COURIER_DIR}/query-edit.py"
 cp -f "${REPO_DIR}/ref/courier/airbnb-courier.sh" "${HOST_COURIER_DIR}/tick-loop.sh"
-chmod 0755 "${HOST_COURIER_DIR}/query-edit.py" "${HOST_COURIER_DIR}/tick-loop.sh"
+cp -f "${REPO_DIR}/ref/courier/ship-reply.sh" "${HOST_COURIER_DIR}/ship-reply.sh"
+chmod 0755 "${HOST_COURIER_DIR}/query-edit.py" "${HOST_COURIER_DIR}/tick-loop.sh" "${HOST_COURIER_DIR}/ship-reply.sh"
 # Make sure the sidecar uid can read+exec these inside the container.
 chown_inside_container "${COURIER_DIR_IN_CONTAINER}/query-edit.py"
 chown_inside_container "${COURIER_DIR_IN_CONTAINER}/tick-loop.sh"
+chown_inside_container "${COURIER_DIR_IN_CONTAINER}/ship-reply.sh"
 
 # ============================================================================
 # 3. Install boss skill at the legacy str-manager-approval path
