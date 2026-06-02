@@ -46,40 +46,33 @@ done
 grep -c 'HOSTEX_ACCESS_TOKEN=' "$SC/data/profiles/$OWNER_PROFILE/.env"
 ```
 
-## 3. Restart so the runtime binds the NEW channel
-The owner gateway connects to its channel at STARTUP, so it must restart BEFORE the new number can
-pair (step 4). Otherwise the bot is still listening on the OLD channel and never sees the new
-number's messages (so no pairing code is ever minted for it).
+## 3. ⚠️ Authorize the NEW number's identity on INBOUND (pairing)
+Inbound auth is keyed by the sender's `cp_` participant id, NOT the chat uid. The NEW number is
+not yet approved, so the bot replies "I don't recognize you / pairing code?" and creates a pending.
+```bash
+# the new number sends ANY message once -> creates a pending; then read its cp_ id:
+docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing list
+```
+Approve it. (The `hermes pairing approve` CLI uppercases the code and fails, so add the id directly:)
+```bash
+AP="$SC/data/profiles/$OWNER_PROFILE/pairing/plow_chat-approved.json"
+PEND="$SC/data/profiles/$OWNER_PROFILE/pairing/plow_chat-pending.json"
+NEWID=<cp_id_of_new_number>
+python3 - "$AP" "$NEWID" <<'PY'
+import json,sys,time
+p,n=sys.argv[1],sys.argv[2]
+d=json.load(open(p)); d[n]={"user_name":"Owner","approved_at":time.time()}
+json.dump(d,open(p,"w"),indent=2)
+PY
+echo '{}' > "$PEND"
+```
+> Optional clean swap: `hermes -p $OWNER_PROFILE pairing revoke` the OLD number's cp_ ids after confirming the new one.
+
+## 4. Restart so the runtime reloads
 ```bash
 cd "$SC" && docker compose restart hermes-owner airbnb-courier
-sleep 7 && curl -s -o /dev/null -w 'owner health=%{http_code}\n' http://127.0.0.1:8787/health
-docker exec ${PROJECT}-hermes-owner sh -c \
-  "grep 'Plow Chat connected' /opt/data/profiles/$OWNER_PROFILE/logs/gateway.log | tail -1"  # must show the NEW uid
+docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing list   # new cp_ in Approved
 ```
-
-## 4. ⚠️ Authorize the NEW number's identity on INBOUND (pairing)
-Inbound auth is keyed by the sender's `cp_` participant id (NOT the chat uid). Until that identity
-is approved, EVERY message from the new number gets `Hi~ I don't recognize you yet! Here's your
-pairing code: <CODE>` and mints a NEW code each time (by design — any current code is valid).
-```bash
-# 1) Owner sends ANY message from the NEW number to the bot. The bot's reply contains the code:
-#       "Here's your pairing code: <CODE>"      (e.g. 34M233TT)
-# 2) Approve with THAT user-facing CODE (from the bot's reply):
-docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing approve plow_chat <CODE>
-#    -> "Approved! User ... (cp_...) can now use the bot. Recognized automatically on next message."
-# 3) Clear leftover pendings + confirm:
-docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing clear-pending
-docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing list   # new cp_ in Approved, 0 pending
-```
-> IMPORTANT: use the code from the **BOT'S REPLY to the owner**, NOT the "Code" column shown by
-> `pairing list` (that column is a hash-prefix and fails with "code not found or expired" — this is
-> the trap that makes `pairing approve` look broken; it is not). Approval **persists** in
-> `pairing/plow_chat-approved.json` keyed by the `cp_` id — once approved, future messages are
-> recognized with no code prompt; no restart needed for the approval to take effect.
->
-> Offline fallback ONLY (no live code available, but you know the `cp_` id from `pairing list`):
-> add it directly to `plow_chat-approved.json` (`{"<cp_id>":{"user_name":"Owner","approved_at":<ts>}}`),
-> run `pairing clear-pending`, then restart `hermes-owner`.
 
 ## 5. Verify BOTH directions for real
 - **Inbound:** the owner sends from the NEW number -> bot responds normally (does NOT ask for a pairing code).
