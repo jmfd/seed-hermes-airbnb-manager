@@ -12,7 +12,10 @@ replies are delivered to the guest on Airbnb.
 ## 0. Backup (this is the rollback path)
 ```bash
 cp -av "$SC/data/profiles/$OWNER_PROFILE/.env" "$SC/data/profiles/$OWNER_PROFILE/.env.bak-ownerswap"
-cp -av "$SC/data/profiles/$OWNER_PROFILE/pairing" "$SC/data/profiles/$OWNER_PROFILE/pairing.bak-ownerswap"
+# NOTE: pairing/* are owned root:root mode 600 (the `hermes pairing` CLI writes them as root
+# inside the container), so a host-side `cp` fails with "Permission denied" and the rollback
+# backup would be incomplete. Back them up FROM INSIDE the container instead:
+docker exec ${PROJECT}-hermes-owner cp -a /opt/data/profiles/$OWNER_PROFILE/pairing /opt/data/profiles/$OWNER_PROFILE/pairing.bak-ownerswap
 grep -E 'PLOW_CHAT_CHAT_UID' "$SC/data/profiles/$OWNER_PROFILE/.env"   # note the OLD uid
 ```
 
@@ -65,6 +68,13 @@ pairing code: <CODE>` and mints a NEW code each time (by design — any current 
 ```bash
 # 1) Owner sends ANY message from the NEW number to the bot. The bot's reply contains the code:
 #       "Here's your pairing code: <CODE>"      (e.g. A1B2C3D4)
+#    Obtain <CODE> one of two ways:
+#      (a) the owner relays it from the bot's reply on their phone, OR
+#      (b) the operator reads it straight from the channel (no relay needed):
+#          NEW=$(grep ^PLOW_CHAT_CHAT_UID= "$SC/data/profiles/$OWNER_PROFILE/.env" | cut -d= -f2)
+#          TOK=$(grep ^PLOW_CHAT_TOKEN=    "$SC/data/profiles/$OWNER_PROFILE/.env" | cut -d= -f2)
+#          curl -s -H "Authorization: Bearer $TOK" "https://api.plow.co/v1/chats/$NEW/messages?limit=6" \
+#            | grep -oE "pairing code: .[A-Z0-9]{6,12}"   # the latest is the live code
 # 2) Approve with THAT user-facing CODE (from the bot's reply):
 docker exec ${PROJECT}-hermes-owner hermes -p $OWNER_PROFILE pairing approve plow_chat <CODE>
 #    -> "Approved! User ... (cp_...) can now use the bot. Recognized automatically on next message."
@@ -102,8 +112,8 @@ cp -av "$SC/data/profiles/$OWNER_PROFILE/.env.bak-ownerswap" "$SC/data/profiles/
 for f in webhook_subscriptions.json channel_directory.json; do
   cp -av "$SC/data/profiles/$OWNER_PROFILE/$f.bak-ownerswap" "$SC/data/profiles/$OWNER_PROFILE/$f"; done
 cp -av "$SC/data/.airbnb-courier.env.bak-ownerswap" "$SC/data/.airbnb-courier.env"
-rm -rf "$SC/data/profiles/$OWNER_PROFILE/pairing" && \
-  cp -av "$SC/data/profiles/$OWNER_PROFILE/pairing.bak-ownerswap" "$SC/data/profiles/$OWNER_PROFILE/pairing"
+docker exec ${PROJECT}-hermes-owner sh -c \
+  "rm -rf /opt/data/profiles/$OWNER_PROFILE/pairing && cp -a /opt/data/profiles/$OWNER_PROFILE/pairing.bak-ownerswap /opt/data/profiles/$OWNER_PROFILE/pairing"
 cd "$SC" && docker compose restart hermes-owner airbnb-courier
 ```
 > Scope: only the owner plow_chat channel + inbound identity change. Hostex/properties/team/brain untouched.
