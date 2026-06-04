@@ -31,6 +31,28 @@
   default), `^o-subseed`, and best-effort-kiosk notes on
   `^act-deploy-kiosk` / `^v-kiosk-active`.
 
+## 0.3.0 — 2026-06-02
+
+### Fixed — owner-approve auto-ship "false sent" (delivery reliability)
+
+- **Root cause:** Branch A had the boss build an ad-hoc curl/python wrapper to POST the
+  approved reply to Hostex. The wrapper could fail silently on Unicode em-dash / curly
+  quotes in drafts, yet the boss still wrote `outbox delivered:true` and replied "Sent" —
+  so the owner saw "sent" while the guest received nothing.
+- **Fix:** new deterministic `ref/courier/ship-reply.sh` (POST -> require http 200 +
+  `error_code:200` -> RE-VERIFY via GET that the host reply landed, polling for Hostex's
+  async propagation -> only then append the outbox row). Branch A in
+  `ref/hermes-skills/airbnb-coordinator-boss/SKILL.md` now calls this script and only says
+  "Sent" on `SHIP_OK`; on `SHIP_FAILED` it reports the error to the owner and keeps the
+  draft pending. Installer deploys `ship-reply.sh` alongside `query-edit.py`.
+
+### Added — owner phone-number swap procedure
+
+- `docs/owner-number-swap.md`: reproducible runbook to move the owner's plow_chat approval
+  channel to a new phone — device-code re-bind, authorize the new `cp_` identity on inbound
+  pairing, propagate the new channel to all baked locations (.env + webhook_subscriptions.json
+  + channel_directory.json + .airbnb-courier.env), restart, verify both directions, rollback.
+
 ## 0.2.0 — 2026-05-25
 
 ### Added — hostex-context (Hostex deep integration)
@@ -52,10 +74,10 @@
   verbatim (callback parser, `User-Agent: curl/8.7.1`,
   `POST /v3/conversations/{id}` body `message`). Credentials flow from the webhook
   prompt via `--base-url`/`--token` — never hardcoded.
-- Installer deploys hostex-context to `/opt/data/home/hostex-context/`
-  (`^act-hostex-context-install`); `verify.sh` gains check **V3f**; SEED.md gains
-  `^obj-hostex-context-installed`, `^act-boss-hostex-context`, and
-  `^v-hostex-context`.
+- Installer deploys hostex-context to `/opt/data/home/hostex-context/` (new
+  install step); `verify.sh` gains check **V3f**; SEED.md gains the
+  hostex-context-installed object, the boss's hostex-context lookup action, and
+  a hostex-context verify check.
 - `ref/dev-harness/dtu.py` — the DTU (Digital Twin of hostex.io) **as real,
   runnable code in this project** (not a patch). Implements `GET /v3/reservations`,
   `POST /v3/listings/calendar`, `GET /v3/availabilities`, and `/admin` + CLI
