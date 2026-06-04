@@ -11,10 +11,20 @@
   installed *after* the §15 acceptance gates — on **this main host**
   (`local` mode), not into the compose stack and not onto a separate Pi.
 - New `^phase0-dashboard-optin` (§2.1) makes installation an **up-front
-  opt-in** (`INSTALL_DASHBOARD=yes`). The only added host prereqs are
-  passwordless `sudo` (`^prereq-dash-sudo`, REQUIRED) and an optional
-  display for the kiosk (`^prereq-dash-display`); the calendar source is
-  satisfied automatically by reusing the Hostex token (`^prereq-dash-source`).
+  opt-in** that the runner MUST actively ask the operator about — a
+  **blocking question with no silent default**. Whoever runs the SEED
+  (operator or coding agent) MUST ask up front and wait for an explicit
+  yes/no before continuing; a coding agent MUST surface the question in
+  the conversation and MUST NOT assume "no" (or "yes") when running
+  non-interactively / stdin is not a TTY. The §2.1 code block ships both
+  `INSTALL_DASHBOARD` lines commented so neither runs as a default, and
+  the §16.1 `[y/N]` prompt is documented as a defense-in-depth backstop —
+  not a license to skip the ask (reaching §16 with `INSTALL_DASHBOARD`
+  unset is now called out as a procedure violation, not a clean skip).
+  The only added host prereqs are passwordless `sudo`
+  (`^prereq-dash-sudo`, REQUIRED) and an optional display for the kiosk
+  (`^prereq-dash-display`); the calendar source is satisfied automatically
+  by reusing the Hostex token (`^prereq-dash-source`).
 - New phase **§16** (`^phase12-*`, verify `^v-phase12`) runs the dashboard
   SEED **fully non-interactively**: after the single `[y/N]` opt-in it
   never prompts again — `local` mode, `id -un` target, `tier-2`

@@ -57,7 +57,10 @@ compose seeds. It is a trailing, independent sub-seed run only after the
 §15 acceptance gates pass.
 
 Whether to install it is an **up-front opt-in** decision the operator MUST
-make in §2.1 — it is never installed silently. When opted in, the §16
+make in §2.1 — it is never installed silently, and it is never skipped
+silently either. Whoever runs this SEED (operator or coding agent) MUST
+explicitly ask the operator up front and MUST NOT assume a default in
+either direction. When opted in, the §16
 sub-seed phase runs **fully non-interactively**: it clones the dashboard
 repo and hands control to that repo's own `SEED.md` in its `local` mode on
 this host, reusing the `HOSTEX_ACCESS_TOKEN` already collected here as the
@@ -105,14 +108,36 @@ interactions (Codex OAuth + plow_chat / iMessage binding).
 
 ### §2.1 — Up-front decision: install the optional dashboard sub-seed?
 
-Before Phase 1, the operator MUST decide whether this run will ALSO
-install the optional `plow-airbnb-dashboard` kiosk sub-seed (§1.1, §16).
-The decision MUST be made now — not discovered at the end — so the
-operator can satisfy its extra prerequisites before the long Hermes
-install begins.
+Before Phase 1, whoever runs this SEED — operator or coding agent — MUST
+**ask the operator** whether this run will ALSO install the optional
+`plow-airbnb-dashboard` kiosk sub-seed (§1.1, §16), and MUST wait for an
+explicit yes/no answer before continuing. This is a **blocking question,
+not a defaultable variable**: the run MUST NOT advance past this section
+until the operator has answered, and MUST NOT assume "no" (or "yes") on
+the operator's behalf — not even when running non-interactively (CI /
+headless / stdin is not a TTY). A coding agent MUST surface the question
+to the operator directly — e.g.
+
+> Do you also want me to install the optional **plow-airbnb-dashboard**
+> kiosk sub-seed at the end of this run? It adds a calendar/reservation
+> web service on this host (plus a Chromium kiosk if this host has a
+> display) and needs passwordless `sudo`. [yes / no]
+
+— rather than reading a default off this page. The decision MUST be made
+now — not discovered at the end — so the operator can satisfy its extra
+prerequisites before the long Hermes install begins.
+
+Record the operator's answer in the environment so every later phase can
+read it. There is **no default** — set the value to exactly what the
+operator chose, and do not run this block until they have actually
+answered:
 
 ```bash
-export INSTALL_DASHBOARD=no    # set to "yes" to also install the §16 kiosk sub-seed
+# Uncomment EXACTLY ONE line to match the operator's answer from the ask
+# above. Do NOT run this block before the operator has answered, and do
+# NOT leave both commented and fall through to a default — there is none.
+# export INSTALL_DASHBOARD=yes   # operator opted in  → §16 installs the kiosk sub-seed
+# export INSTALL_DASHBOARD=no    # operator declined  → install is complete at §15
 ```
 
 If `INSTALL_DASHBOARD=yes`, **this main host** MUST additionally satisfy
@@ -127,10 +152,15 @@ mode); its `SEED.md` `## Dependencies` is the authoritative list.
 
 Walltime: add ~5–10 minutes (local install on this host; no SSH).
 
-If the operator skips this export, §16 prompts once interactively when
-stdin is a TTY ("Also install the dashboard? [y/N]") and otherwise
-defaults to NOT installing the dashboard. That single y/N is the ONLY
-prompt the sub-seed ever issues.
+There is **no silent default** at this step: the runner MUST have asked
+the operator and received an answer before continuing. The §16.1
+interactive `[y/N]` prompt is a defense-in-depth backstop for a human
+re-running §16 in isolation — it is NOT a license to skip the up-front
+ask. A coding agent MUST NOT treat a non-TTY stdin (CI / headless) as
+permission to assume "no"; it MUST put the question to the operator in
+the conversation and wait for the answer. Once answered, that single
+yes/no is the ONLY decision the sub-seed ever requires of the operator —
+the §16 run itself (§16.3) is fully non-interactive.
 
 ---
 
@@ -722,9 +752,11 @@ production-ready. Any failure is install-not-complete.
 ## §16 — Optional sub-seed: plow-airbnb-dashboard (Phase 12)
 
 This phase runs ONLY if the operator opted in at §2.1
-(`INSTALL_DASHBOARD=yes`, or an interactive "yes" when prompted). If
-`INSTALL_DASHBOARD` is unset or `no`, the install is **complete at §15** —
-skip this phase entirely.
+(`INSTALL_DASHBOARD=yes`, or an interactive "yes" when prompted). If the
+operator declined (`INSTALL_DASHBOARD=no`), the install is **complete at
+§15** — skip this phase entirely. `INSTALL_DASHBOARD` being *unset* here
+is NOT a clean skip: it means the mandatory §2.1 ask never happened, which
+is a procedure violation — see §16.1.
 
 The dashboard is a **sub-seed**: a self-contained SEED with its own
 `SEED.md`. This phase installs it by the same pattern the §1 stack uses
@@ -751,9 +783,14 @@ if [ "${INSTALL_DASHBOARD:-no}" != "yes" ]; then
 fi
 ```
 
-When `INSTALL_DASHBOARD` is unset and stdin is a TTY, the operator MUST be
-prompted ("Also install the plow-airbnb-dashboard kiosk sub-seed? [y/N]")
-and the answer treated as the value above.
+`INSTALL_DASHBOARD` should already be set from the mandatory §2.1 ask. If
+it is somehow still unset when §16 is reached and stdin is a TTY, the
+operator MUST be prompted ("Also install the plow-airbnb-dashboard kiosk
+sub-seed? [y/N]") and the answer treated as the value above. Reaching §16
+with `INSTALL_DASHBOARD` unset means the §2.1 ask was skipped — that is a
+procedure violation, not a clean default. A coding agent MUST go back and
+ask the operator (§2.1) rather than letting the `:-no` gate above silently
+skip the dashboard.
 
 ### §16.2 — Clone the dashboard sub-seed
 
